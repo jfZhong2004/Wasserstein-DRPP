@@ -1,0 +1,22 @@
+system: systemC
+steps: 32
+step_index: 0..31
+x0: 2.0
+dataset_seed_master: 20260412
+eval_seed_master: 30260412
+n_main: 101
+m_monte_carlo: 2
+u_max: 4.0
+nominal_noise_mean: 0.0
+nominal_noise_var: 1.0
+control_modes: [zero, pid]
+pid_gains: {kp: 0.56260537, ki: 0.00129945, kd: 0.00000016}
+beta: 0.05
+a: 1.5
+c1: 2.0
+c2: 1.0
+epsilon_N: 0.19111137839391754
+gamma0: min(0.3*||z||_2, 5) * dt^2, dt=1
+w4_rule: truncated_t_df3_then_variance_normalized
+oracle_rule: true noise distribution only
+kde_rule: robust_silverman_per_step
