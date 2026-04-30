@@ -305,6 +305,68 @@ $$
 
 约束 $\bar{G} \leq 1$ 比 $G \leq 1$ 更严格（可行域更小），因此松弛问题的最优值 $\leq$ 原问题最优值。但 $\bar{G}$ 中的每个积分可以**解析计算**。
 
+**命题（定理 2 的 LSE 仍是单步 DRPP 严格原问题下界）**  
+记定理 2 的有限维问题最优值为
+$$
+V_{\mathrm{low}}
+:=
+\max_{\lambda\ge0,\mathbf s}\left\{-\lambda\varepsilon+\frac1N\sum_{i=1}^Ns_i\right\}
+\quad\text{s.t.}\quad
+G(\lambda,\mathbf s)\le1,
+$$
+其中
+$$
+G(\lambda,\mathbf s)=\int_{\mathcal X}\max_i \exp\!\big(s_i-\lambda\varphi_i(x)\big)\,dx,\qquad
+\varphi_i(x)=\max\!\big(0,\|x-\hat x_i^{pred}\|-R_i\big).
+$$
+记其加性 LSE 松弛最优值为
+$$
+V_{\mathrm{LSE}}
+:=
+\max_{\lambda\ge0,\mathbf s}\left\{-\lambda\varepsilon+\frac1N\sum_{i=1}^Ns_i\right\}
+\quad\text{s.t.}\quad
+\bar G(\lambda,\mathbf s)\le1,
+$$
+$$
+\bar G(\lambda,\mathbf s):=\int_{\mathcal X}\sum_{i=1}^N \exp\!\big(s_i-\lambda\varphi_i(x)\big)\,dx.
+$$
+则有
+$$
+V_{\mathrm{LSE}}\le V_{\mathrm{low}}\le V_{\mathrm{strict}},
+$$
+其中 $V_{\mathrm{strict}}$ 是单步严格耦合 DRPP 原问题最优值（见定理 2 结论）。
+
+**证明：**
+1. 对任意固定 $(\lambda,\mathbf s)$ 与任意 $x$，令
+   $$
+   u_i(x):=\exp\!\big(s_i-\lambda\varphi_i(x)\big)\ge0,
+   $$
+   则
+   $$
+   \max_i u_i(x)\le \sum_i u_i(x).
+   $$
+   对 $x$ 积分得
+   $$
+   G(\lambda,\mathbf s)\le \bar G(\lambda,\mathbf s).
+   $$
+2. 因此
+   $$
+   \{(\lambda,\mathbf s):\bar G\le1\}\subseteq \{(\lambda,\mathbf s):G\le1\}.
+   $$
+   两个问题目标函数相同且都是最大化，故
+   $$
+   V_{\mathrm{LSE}}\le V_{\mathrm{low}}.
+   $$
+3. 定理 2 已证明
+   $$
+   V_{\mathrm{low}}\le V_{\mathrm{strict}}.
+   $$
+   链式合并即得
+   $$
+   V_{\mathrm{LSE}}\le V_{\mathrm{low}}\le V_{\mathrm{strict}}.
+   $$
+命题证毕。$\square$
+
 ### 4.2 全空间单核积分
 
 记 $\mathcal{X} = \mathbb{R}^d$。定义 $d$ 维全空间积分常数：
@@ -376,6 +438,97 @@ LSE 松弛的精度取决于核函数之间的**重叠程度**：
 - 当锚点 $\hat{x}_i^{pred}$ 彼此远离（间距 $\gg 1/\lambda$）时，各核几乎不重叠，$\sum_i \approx \max_i$，松弛近乎无损
 - 当锚点密集聚集时，重叠严重，松弛较粗糙
 
+#### 一维下“等价无穷小”结论（定理 1 问题）
+
+下面给出一个可验证的充分条件，说明在一维中，当锚点逐渐分离时，LSE 加性松弛与原问题的最优值差异趋于 $0$。
+
+> 注意：本结论比较的是**定理 1 对应上界子问题**（约束 $G\le 1$）与其 LSE 加性松弛（约束 $\bar G\le 1$），不是严格耦合原问题 $V_k^{strict}$。
+
+设 $d=1$，$\mathcal X=\mathbb R$，$c_i:=\hat x_i^{pred}$，并定义
+$$
+f_i(x):=\exp\!\big(s_i-\lambda|x-c_i|\big),\qquad
+G(\lambda,\mathbf s):=\int_{\mathbb R}\max_i f_i(x)\,dx,\qquad
+\bar G(\lambda,\mathbf s):=\int_{\mathbb R}\sum_i f_i(x)\,dx.
+$$
+记原问题最优值为 $J^\star$，LSE 松弛最优值为 $\bar J^\star$，则总有 $\bar J^\star\le J^\star$。  
+定义重叠误差
+$$
+\Delta_G(\lambda,\mathbf s):=\bar G(\lambda,\mathbf s)-G(\lambda,\mathbf s)\ge 0.
+$$
+
+对任意非负 $\{a_i\}$ 有点态不等式
+$$
+\sum_i a_i-\max_i a_i\le \sum_{i<j}\min(a_i,a_j),
+$$
+因此
+$$
+\Delta_G(\lambda,\mathbf s)\le \sum_{i<j}\int_{\mathbb R}\min\!\big(f_i(x),f_j(x)\big)\,dx.
+$$
+
+再用 $\min(u,v)\le \sqrt{uv}$ 得
+$$
+\int_{\mathbb R}\min(f_i,f_j)\,dx
+\le
+e^{(s_i+s_j)/2}\!\int_{\mathbb R}
+e^{-\frac{\lambda}{2}(|x-c_i|+|x-c_j|)}dx.
+$$
+记 $\delta_{ij}:=|c_i-c_j|$，则一维恒等式
+$$
+|x-c_i|+|x-c_j|=\delta_{ij}+2\,\mathrm{dist}\!\left(x,[c_i,c_j]\right)
+$$
+给出
+$$
+\int_{\mathbb R}\min(f_i,f_j)\,dx
+\le
+e^{(s_i+s_j)/2}\,e^{-\lambda\delta_{ij}/2}\!\left(\delta_{ij}+\frac{2}{\lambda}\right).
+$$
+
+若 $(\lambda,\mathbf s)$ 满足原约束 $G\le 1$，则对每个 $i$：
+$$
+\int_{\mathbb R} f_i(x)\,dx=\frac{2e^{s_i}}{\lambda}\le \int_{\mathbb R}\max_j f_j(x)\,dx=G\le 1
+\;\Longrightarrow\;
+e^{s_i}\le \frac{\lambda}{2}.
+$$
+从而
+$$
+\Delta_G(\lambda,\mathbf s)
+\le
+\sum_{i<j}\left(\frac{\lambda\delta_{ij}}{2}+1\right)e^{-\lambda\delta_{ij}/2}.
+\tag{4.4.1}
+$$
+
+现在取原问题最优解 $(\lambda^\star,\mathbf s^\star)$。令
+$$
+\eta^\star:=\log\!\big(1+\Delta_G(\lambda^\star,\mathbf s^\star)\big),\qquad
+\mathbf s'=\mathbf s^\star-\eta^\star\mathbf 1.
+$$
+则
+$$
+\bar G(\lambda^\star,\mathbf s')
+=e^{-\eta^\star}\bar G(\lambda^\star,\mathbf s^\star)
+=\frac{G(\lambda^\star,\mathbf s^\star)+\Delta_G(\lambda^\star,\mathbf s^\star)}
+{1+\Delta_G(\lambda^\star,\mathbf s^\star)}
+\le 1,
+$$
+即 $(\lambda^\star,\mathbf s')$ 对松弛问题可行，且目标仅下降 $\eta^\star$。因此
+$$
+0\le J^\star-\bar J^\star\le \eta^\star
+=\log\!\big(1+\Delta_G(\lambda^\star,\mathbf s^\star)\big).
+\tag{4.4.2}
+$$
+
+若再假设：
+1. 最小锚点间距 $\Delta:=\min_{i\ne j}\delta_{ij}\to\infty$（考虑一列问题）；  
+2. 最优乘子有下界 $\lambda^\star\ge \lambda_0>0$；
+
+则由 (4.4.1) 得 $\Delta_G(\lambda^\star,\mathbf s^\star)$ 指数衰减，进而
+$$
+0\le J^\star-\bar J^\star
+\le C\,e^{-\lambda_0\Delta/2}=o(1)\qquad(\Delta\to\infty),
+$$
+其中 $C$ 与 $N$ 及锚点几何上界有关。  
+这就给出了“一维下 LSE 松弛差异为等价无穷小”的一组充分条件。
+
 **参数化松弛改进：** 利用 $\ell_p$-范数的极限性质：
 $$
 \max_i a_i = \lim_{p \to \infty} \Big(\sum_i a_i^p\Big)^{1/p}
@@ -386,6 +539,76 @@ $$
 $$
 
 满足 $G \leq \bar{G}_p \leq G \cdot N^{1/p}$（即近似误差至多 $N^{1/p}$ 倍）。$p = 1$ 退化为本节的加性松弛；$p \to \infty$ 恢复原问题。实际中取 $p = 5 \sim 10$ 即可获得较好的近似精度。$\bar{G}_p$ 对 $(\lambda, \mathbf{s})$ 处处可微，便于梯度优化。
+
+### 4.5 保持“上界性质”的平滑近似（定理 1）
+
+上面的加性 LSE（$\max \le \sum$）会把定理 1 的可行域缩小，因此最优值变小；它一般不能保持“对严格原问题的上界”性质。  
+如果希望近似后依然保持上界，可改用**下逼近 max** 的平滑函数：
+
+$$
+m_\tau^{-}(A_1,\dots,A_N)
+:=
+\frac{1}{\tau}\log\!\sum_{i=1}^N e^{\tau A_i}
+-\frac{\log N}{\tau},\qquad \tau>0.
+$$
+
+由 LSE 基本不等式可得
+$$
+\max_i A_i-\frac{\log N}{\tau}\le m_\tau^{-}(A)\le \max_i A_i.
+\tag{4.5.1}
+$$
+
+对定理 1，令
+$$
+A_i(x)=s_i-\lambda\|x-\hat x_i^{pred}\|,\qquad
+G(\lambda,\mathbf s)=\int_{\mathcal X}\exp\!\big(\max_i A_i(x)\big)\,dx.
+$$
+定义“保上界平滑约束函数”
+$$
+G_\tau^{-}(\lambda,\mathbf s)
+:=
+\int_{\mathcal X}\exp\!\big(m_\tau^{-}(A_1(x),\dots,A_N(x))\big)\,dx.
+$$
+由 (4.5.1) 逐点指数化并积分，得到
+$$
+G_\tau^{-}(\lambda,\mathbf s)\le G(\lambda,\mathbf s).
+\tag{4.5.2}
+$$
+
+据此构造近似问题
+$$
+V_\tau^{-}
+:=
+\max_{\lambda\ge0,\mathbf s}
+\left\{-\lambda\varepsilon+\frac1N\sum_{i=1}^Ns_i\right\}
+\quad
+\text{s.t.}\quad
+G_\tau^{-}(\lambda,\mathbf s)\le1.
+$$
+
+**命题（上界保持）**：设定理 1 精确值为 $\bar V$，严格原问题值为 $V_{\mathrm{strict}}$（满足 $V_{\mathrm{strict}}\le \bar V$）。则
+$$
+V_\tau^{-}\ge \bar V\ge V_{\mathrm{strict}}.
+$$
+
+**证明：**
+1. 由 (4.5.2) 得：若 $G(\lambda,\mathbf s)\le1$，则必有 $G_\tau^{-}(\lambda,\mathbf s)\le1$。  
+   因此可行域包含关系为
+   $$
+   \{G\le1\}\subseteq\{G_\tau^{-}\le1\}.
+   $$
+2. 两问题目标函数相同且均为最大化，故
+   $$
+   V_\tau^{-}\ge \bar V.
+   $$
+3. 由定理 1 对严格原问题的上界关系：$V_{\mathrm{strict}}\le \bar V$。  
+   链式合并即得
+   $$
+   V_\tau^{-}\ge \bar V\ge V_{\mathrm{strict}}.
+   $$
+命题证毕。$\square$
+
+另外，随着 $\tau\to\infty$，$m_\tau^{-}(A)\uparrow\max_i A_i$，因此 $G_\tau^{-}\uparrow G$，可行域收缩，$V_\tau^{-}$ 会从上方逼近 $\bar V$。
 
 ---
 
