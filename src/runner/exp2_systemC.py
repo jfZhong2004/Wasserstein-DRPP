@@ -59,6 +59,10 @@ def _write_experiment_config(path: Path, cfg: ExperimentConfig, pid_gains: PIDGa
         f"c1: {cfg.radius.c1}",
         f"c2: {cfg.radius.c2}",
         f"epsilon_N: {epsilon_n}",
+        f"wdrpp_solver_mode: {cfg.wdrpp_solver_mode}",
+        f"wdrpp_lse_integration: {cfg.wdrpp_lse_integration}",
+        f"wdrpp_lse_mc_samples: {cfg.wdrpp_lse_mc_samples}",
+        f"wdrpp_lse_mc_seed: {cfg.wdrpp_lse_mc_seed}",
         "gamma0: min(0.3*||z||_2, 5) * dt^2, dt=1",
         "w4_rule: truncated_t_df3_then_variance_normalized",
         "oracle_rule: true noise distribution only",
@@ -80,7 +84,7 @@ def _write_requirement_trace(path: Path) -> None:
         "7. Nominal baseline uses fixed Gaussian N(nominal_drift, 1).",
         "8. gamma0(z)=min(0.3||z||_2, 5).",
         "9. Wasserstein radius follows Theorem 3.4 / Eq.(8) with beta=0.05.",
-        "10. W-DRPP solver reuses src/solvers/drpp_1d_exact_solver.py directly.",
+        "10. W-DRPP solver mode is configurable: exact or additive-LSE relaxation.",
         "11. Training and evaluation trajectories use different random seed masters (no seed overlap).",
     ]
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -151,25 +155,47 @@ def run_experiment(cfg: ExperimentConfig, skip_dataset_build: bool = False) -> P
                     x = x_next
 
             method_to_mean: Dict[str, np.ndarray] = {}
+            method_to_q025: Dict[str, np.ndarray] = {}
+            method_to_q975: Dict[str, np.ndarray] = {}
             for pred in predictors:
                 means = np.zeros(cfg.steps, dtype=float)
                 stds = np.zeros(cfg.steps, dtype=float)
+                q025s = np.zeros(cfg.steps, dtype=float)
+                q975s = np.zeros(cfg.steps, dtype=float)
                 for k in range(cfg.steps):
-                    mean_k, std_k = summarize_logscores(np.asarray(score_buckets[pred.name][k], dtype=float))
+                    score_arr = np.asarray(score_buckets[pred.name][k], dtype=float)
+                    mean_k, std_k = summarize_logscores(score_arr)
+                    q025_k = float(np.quantile(score_arr, 0.025))
+                    q975_k = float(np.quantile(score_arr, 0.975))
                     means[k] = mean_k
                     stds[k] = std_k
+                    q025s[k] = q025_k
+                    q975s[k] = q975_k
                     per_step_rows.append(
-                        [control_mode, noise_id, k, pred.name, float(mean_k), float(std_k)]
+                        [
+                            control_mode,
+                            noise_id,
+                            k,
+                            pred.name,
+                            float(mean_k),
+                            float(std_k),
+                            q025_k,
+                            q975_k,
+                        ]
                     )
 
                 overall = float(np.mean(means))
                 summary_rows.append([control_mode, noise_id, pred.name, overall])
                 method_to_mean[pred.name] = means
+                method_to_q025[pred.name] = q025s
+                method_to_q975[pred.name] = q975s
 
             fig_path = figures_dir / f"score_curves_control_{control_mode}_noise_{noise_id}.png"
             plot_score_curves(
                 steps=steps,
                 method_to_mean=method_to_mean,
+                method_to_q025=method_to_q025,
+                method_to_q975=method_to_q975,
                 title=f"System C | control={control_mode} | noise={noise_id} | N={cfg.n_main} | M={cfg.m_monte_carlo}",
                 output_path=fig_path,
                 y_q_low=cfg.plot_y_q_low,
@@ -179,7 +205,18 @@ def run_experiment(cfg: ExperimentConfig, skip_dataset_build: bool = False) -> P
 
     with (run_dir / "per_step_scores.csv").open("w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        writer.writerow(["control_mode", "noise_id", "step", "method", "mean_logscore", "std_logscore"])
+        writer.writerow(
+            [
+                "control_mode",
+                "noise_id",
+                "step",
+                "method",
+                "mean_logscore",
+                "std_logscore",
+                "q025_logscore",
+                "q975_logscore",
+            ]
+        )
         writer.writerows(per_step_rows)
 
     with (run_dir / "summary_table.csv").open("w", newline="", encoding="utf-8") as f:
@@ -203,6 +240,32 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--eval-seed-master", type=int, default=30260412, help="Master seed for evaluation trajectories.")
     parser.add_argument("--datasets-root", type=str, default="datasets_1d_wdrpp", help="Dataset root directory.")
     parser.add_argument("--results-root", type=str, default="results_1d_wdrpp", help="Results root directory.")
+    parser.add_argument(
+        "--wdrpp-solver-mode",
+        type=str,
+        default="exact",
+        choices=["exact", "lse"],
+        help="W-DRPP solver mode for both upper/lower predictors.",
+    )
+    parser.add_argument(
+        "--wdrpp-lse-integration",
+        type=str,
+        default="closed_form",
+        choices=["closed_form", "mc"],
+        help="Integration method used by LSE solver.",
+    )
+    parser.add_argument(
+        "--wdrpp-lse-mc-samples",
+        type=int,
+        default=2000,
+        help="MC sample count for LSE integration when --wdrpp-lse-integration=mc.",
+    )
+    parser.add_argument(
+        "--wdrpp-lse-mc-seed",
+        type=int,
+        default=20260501,
+        help="Base random seed for LSE MC integration.",
+    )
     parser.add_argument("--skip-dataset-build", action="store_true", help="Skip historical dataset generation.")
     return parser.parse_args()
 
@@ -220,6 +283,10 @@ def main() -> None:
         eval_seed_master=int(args.eval_seed_master),
         datasets_root=Path(args.datasets_root),
         results_root=Path(args.results_root),
+        wdrpp_solver_mode=str(args.wdrpp_solver_mode),
+        wdrpp_lse_integration=str(args.wdrpp_lse_integration),
+        wdrpp_lse_mc_samples=int(args.wdrpp_lse_mc_samples),
+        wdrpp_lse_mc_seed=int(args.wdrpp_lse_mc_seed),
         radius=radius_cfg,
     )
     if cfg.steps != 32:

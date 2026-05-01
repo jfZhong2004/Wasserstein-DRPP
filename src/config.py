@@ -64,6 +64,12 @@ class ExperimentConfig:
     w4_truncation_L: float = 8.0
     gamma2_noise_drpp: float = 3.0
     lower_r_quant: float = 0.02
+    wdrpp_solver_mode: str = "exact"  # "exact" or "lse"
+    wdrpp_lse_integration: str = "closed_form"  # "closed_form" or "mc"
+    wdrpp_lse_mc_samples: int = 2000
+    wdrpp_lse_mc_seed: int = 20260501
+    wdrpp_lse_maxiter: int = 300
+    wdrpp_lse_tol: float = 1e-8
     plot_y_q_low: float = 0.02
     plot_y_q_high: float = 0.98
     plot_y_padding_ratio: float = 0.1
