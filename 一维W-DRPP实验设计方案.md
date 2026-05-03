@@ -1,418 +1,644 @@
-实验要求：
+# 一维 W-DRPP 实验设计方案（当前实现适配版）
 
-请你参考实验方案设计.md，为我设计一个一维W-DRPP实验文档的markdown文件，要求能够直接参照这一文档，以此作为框架，生成所需实验的所有代码。要求：基准动力系统仅考虑原实验方案中的系统C，噪声分布库可以原样保留。
+本文档用于描述当前 `src/` 代码实际实现的一维 W-DRPP 实验流程。它替代早期“生成代码前”的设计稿，重点同步以下修改：
 
-历史数据集生成方式、样本量取值范围和原来一致。请你单独生成一个文件夹存储数据集。步数为0,1,...,31。其中系统采取采取两种控制方式，一种为完全没有控制（u为0），另一种采取LQR控制（Q和R全部为单位阵，需要你自行调用工具或自行实现）。
-
-对比方法采取DRPP.pdf（若无法读取，请读取DRPP.md）中的Noise-DRPP（后续我会再扩展Eigen-DRPP，现在还不需要实现，但需要保留接口），KDE，Empirical，Oracle，W-DRPP中的上下界。
-
-仅开展原实验方案设计中的实验2，使用系统C，但是\gamma_0取一个合理的函数（参考DRPP.pdf），0-31步预测，进行M=1000次蒙特卡洛重复，性能指标仅评估log-score。
-
-实验结果展示：需要在一个文件夹中保存实验结果（每次实验要建立一个带有时间戳的文件夹），不仅有实验条件描述、实验结果；还要有可视化：每一时间步基于不同算法的评分，画成几条图线展示在同一个图像中。
-
-如果有其他实验细节，可以参考DRPP中开展实验的方法。
-
- 一维W-DRPP实验设计方案.md已存在，请你直接原文件内容（要求）以下进行文档撰写。请你先生成实验文档，评估实验要求的合理性及缺陷，是否有未提及的要求，不要直接开始写代码。如有疑问请提出。
-
-请在下面写下正式实验设计方案，不要删掉上面的内容：
+- 控制方式固定为 Zero control 与 PID control，不再使用 LQR。
+- 对比方法以当前代码为准：Nominal、Noise-DRPP、KDE、Oracle、W-DRPP Upper、W-DRPP Lower。
+- `Empirical` 不再作为当前主实验方法；`Eig-DRPP` 只保留接口占位，不参与当前结果图。
+- 常规实验包含 W1-W6 六种噪声。
+- 新增 W7 adversary 压力测试：按控制方式和 step pooled W1-W6 历史残差，构造 common adversary，当前目标 predictor 为 `wdrpp_upper`。
+- W-DRPP 求解器支持 `exact` 与 `lse` 两种模式。
+- 结果目录 `results_1d_wdrpp/` 已作为实验输出目录，并已从 Git 跟踪中移除。
 
 ---
 
-## 一、实验要求合理性评估（先评估，后实施）
+## 一、实验目标
 
-### 1.1 总体合理性
+当前实验只考虑 System C 的一维系统，目标是比较不同概率预测方法在多种噪声分布和两种控制方式下的一步 log-score 表现。
 
-当前要求是可执行且目标明确的，尤其是：
+常规实验回答：
 
-1. 只做系统 C，范围收敛，利于快速闭环；
-2. 仅保留实验 2（噪声分布敏感性），避免任务发散；
-3. 固定指标为 Log-Score，便于统一比较；
-4. 明确了两种控制策略（Zero / PID）和 Monte Carlo 重复次数（M=1000）；
-5. 明确要求结果目录按时间戳存档，便于复现实验与追溯。
+1. 在 W1-W6 不同噪声形状下，各预测器的一步概率预测性能如何；
+2. Zero control 与 PID control 是否会改变不同方法的相对表现；
+3. W-DRPP upper/lower 相比 Nominal、Noise-DRPP、KDE 和 Oracle 的表现如何。
 
-### 1.2 主要缺陷与风险点
+W7 adversary 压力测试回答：
 
-1. **PID 参数若不先固定，会导致结果不可比**  
-   系统 C 为非线性系统，PID 参数 \((K_p,K_i,K_d)\) 若按实验配置分别手调，会引入额外偏差，需先统一整定并冻结。
-
-2. **\(\gamma_0(z)\) 对下界结果高度敏感**  
-   本轮已固定采用 DRPP.pdf 形式，后续实现中不得再改动该函数。
-
-3. **Oracle 口径已固定**  
-   本轮统一定义为“使用真实噪声分布 \(P_w\) 的一步预测器”，后续实现不得替换为其他近似口径。
-
-4. **KDE 带宽若不固定会引入额外波动**  
-   本轮建议固定为“稳健 Silverman 规则”并写入配置，避免人为调参。
-
-5. **0–31 步的评价口径需明确**  
-   建议定义为 \(k=0,\dots,31\) 共 32 个一步预测评分，并按步统计均值与置信区间。
-
-### 1.3 本轮固定约定（按本次新指令执行）
-
-1. **控制策略固定为 Zero + PID**，LQR 暂不纳入本轮实验。  
-2. **PID 参数先统一整定，再冻结用于全部实验配置**。建议采用“两阶段自动整定”：
-   - 阶段 A（粗搜）：在标称模型上网格搜索 \((K_p,K_i,K_d)\)（固定范围见 2.2.4）；
-   - 阶段 B（细化）：在粗搜最优点附近做局部连续优化（如 Nelder-Mead）；
-   - 整定与正式实验统一采用控制限幅 \(u_{\max}=4\)（即 \(u_k\in[-4,4]\)）并启用 anti-windup；
-   - 目标函数：
-   \[
-   J_{\text{PID}}=\sum_{k=0}^{31}\left(x_{k+1}^2+0.1\,u_k^2\right),
-   \]
-   选取使 \(J_{\text{PID}}\) 最小的一组参数作为全局固定 PID 参数。  
-3. **\(\gamma_0(z)\) 固定采用 DRPP.pdf 形式**（与 `DRPP.md` 一致）：
-   \[
-   \gamma_0(z)=\min\{0.3\|z\|_2,\ 5\}\cdot \Delta t^2,\quad z=(x,u),\ \Delta t=1.
-   \]
-4. **Oracle 定义**：使用实验配置下的真实噪声分布 \(P_w\) 构造真实一步条件密度。  
-5. **KDE**：Gaussian kernel + 稳健 Silverman 带宽（见 2.6.4，固定公式）。  
-6. **噪声尺度统一**：W1–W6 全部固定为方差 1（统一数量级，仅保留形状差异）。  
-7. **W-DRPP 求解器**：直接复用现有 `src/solvers/drpp_1d_exact_solver.py`（不重复实现）。
-8. **Wasserstein 半径**：严格按 `Wassersteein.pdf` / `Wassersteein.md` 的 Theorem 3.4 与式 (8) 计算，固定 \(\beta=0.05\)。
+1. 若在 Wasserstein 球内构造一个针对 `wdrpp_upper` 的 common adversary，同一 adversarial 分布下各方法的 log-score 如何；
+2. W-DRPP 在“普通噪声平均评估”和“受限 Wasserstein adversary 压力测试”中的表现是否一致；
+3. 当前求解器和绘图流程在 adversarial 场景下是否数值稳定。
 
 ---
 
-## 二、正式实验设计方案（可直接转化为代码实现）
+## 二、动力系统与控制
 
-> 本方案严格针对“系统 C + 实验 2（噪声分布敏感性）”。
+### 2.1 真实系统 System C
 
-## 2.1 实验目标
+真实系统为
 
-在系统 C 下比较以下方法在不同噪声分布（W1–W6）中的一步概率预测性能（Log-Score）：
+$$
+x_{k+1}=\sin(x_k)+0.5u_k+w_k,\qquad k=0,\dots,31.
+$$
 
-- Moment-DRPP（Noise-DRPP）
-- KDE
-- Empirical
-- Oracle
-- W-DRPP Upper（定理 1，\(\gamma_0\equiv 0\)）
-- W-DRPP Lower（定理 2，\(\gamma_0\neq 0\)）
+其中 $w_k$ 为真实噪声。
 
-并保留 **Eig-DRPP 接口占位**（仅接口，不实现算法）。
+### 2.2 标称模型
 
-## 2.2 动力系统与控制
+标称模型用于计算经验残差：
 
-### 2.2.1 真实系统（System C）
-\[
-x_{k+1}=\sin(x_k)+0.5u_k+w_k,\quad k=0,\dots,31.
-\]
+$$
+\bar f_k(x_k,u_k)=x_k-\frac{x_k^3}{6}+0.5u_k.
+$$
 
-### 2.2.2 标称模型（用于构造经验噪声）
-\[
-\bar f_k(z)=x_k-\frac{x_k^3}{6}+0.5u_k,\quad z=(x_k,u_k).
-\]
+经验残差定义为
 
-### 2.2.3 控制策略
+$$
+\hat w_{k,i}
+=
+\hat x_{k+1,i}-\bar f_k(\hat x_{k,i},\hat u_{k,i}).
+$$
 
-1. **Zero control**：\(u_k=0\)。  
-2. **PID control**：  
-   - 控制目标：跟踪 \(x_{\text{ref}}=0\)；  
-   - 误差定义：\(e_k=x_{\text{ref}}-x_k\)；  
-   - 控制律：
-   \[
-   u_k=\operatorname{sat}\!\Big(K_p e_k + K_i\sum_{t=0}^{k}e_t + K_d(e_k-e_{k-1})\Big),
-   \]
-   其中 \(\operatorname{sat}(\cdot)\) 固定为
-   \[
-   \operatorname{sat}(v)=\min\{4,\max\{-4,v\}\},
-   \]
-   并固定启用 anti-windup。
+### 2.3 控制方式
 
-### 2.2.4 PID 参数确定流程（先于正式实验执行）
+当前代码固定两种控制方式：
 
-1. 在标称模型
-\[
-\bar f_k(z)=x_k-\frac{x_k^3}{6}+0.5u_k
-\]
-上进行 32 步滚动仿真；  
-2. 先做**阶段 A 粗搜**（推荐固定范围）：
-   \[
-   K_p\in[0,4]\ \text{(step }0.25),\quad
-   K_i\in[0,1.2]\ \text{(step }0.1),\quad
-   K_d\in[0,1.5]\ \text{(step }0.1).
-   \]
-3. 以
-\[
-J_{\text{PID}}=\sum_{k=0}^{31}(x_{k+1}^2+0.1u_k^2)
-\]
-为整定目标，先粗搜后细化；  
-4. 再做**阶段 B 细化**：以粗搜最优点为初值，采用 Nelder-Mead，在局部盒约束
-   \[
-   K_p\pm0.4,\ K_i\pm0.2,\ K_d\pm0.2
-   \]
-   （并裁剪回阶段 A 全局范围）内优化。  
-5. 固定主随机种子 `seed_master=20260412` 与单一初值 \(x_0=2.0\) 进行整定评估；  
-6. 得到单组 \((K_p,K_i,K_d)\) 后，冻结用于全部后续实验（Zero 控制组除外）。
+1. Zero control：$u_k=0$。
+2. PID control：跟踪目标为 $x_{\mathrm{ref}}=0$，控制输入带限幅 $u_k\in[-4,4]$。
 
-## 2.3 噪声分布库（保持形状一致，统一方差=1）
+PID 控制律为
 
-- W1: \(\mathcal N(0,1)\)  
-- W2: 基础分布 \(W2_{\text{base}}=0.5\mathcal N(-2,0.5^2)+0.5\mathcal N(2,0.5^2)\)，使用
-  \[
-  W2=\frac{W2_{\text{base}}}{\sqrt{4.25}}
-  \]
-  使 \(\mathrm{Var}(W2)=1\)。  
-- W3: 基础分布 \(W3_{\text{base}}=0.3\mathcal N(-1,0.3^2)+0.7\mathcal N(2,1^2)\)，使用
-  \[
-  W3=\frac{W3_{\text{base}}}{\sqrt{2.617}}
-  \]
-  使 \(\mathrm{Var}(W3)=1\)。  
-- W4: Student-t(\(\nu=3\)) 缩放到方差 1  
-- W5: \(U[-\sqrt{3},\sqrt{3}]\)（本身方差 1）  
-- W6: 基础分布
-  \[
-  W6_{\text{base}}=\frac{1}{3}\mathcal N(-3,0.3^2)+\frac{1}{3}\mathcal N(0,0.3^2)+\frac{1}{3}\mathcal N(3,0.3^2),
-  \]
-  使用
-  \[
-  W6=\frac{W6_{\text{base}}}{\sqrt{6.09}}
-  \]
-  使 \(\mathrm{Var}(W6)=1\)。
+$$
+u_k=\operatorname{sat}\left(
+K_p e_k
++K_i\sum_{t=0}^{k}e_t
++K_d(e_k-e_{k-1})
+\right),
+$$
 
-说明：统一方差是强制约束，用于保证不同噪声配置的比较聚焦在“分布形状差异”而非“能量大小差异”。
+其中
 
-## 2.4 历史数据生成与样本量
+$$
+e_k=x_{\mathrm{ref}}-x_k,\qquad
+\operatorname{sat}(v)=\min\{4,\max\{-4,v\}\}.
+$$
 
-### 2.4.1 样本量
-\[
+PID 参数由 `src/controllers/pid_tuning.py` 自动整定后冻结，当前配置记录在每次运行的 `experiment_config.yaml` 中。
+
+---
+
+## 三、噪声分布库
+
+常规实验保留 W1-W6 六种噪声。当前代码中噪声实现位于 `src/noise_lib/noise_w1_w6.py`。
+
+统一原则：
+
+- W1-W6 均统一到方差约为 1；
+- 实验比较重点是噪声形状差异，而不是噪声能量差异；
+- W4 使用截断 Student-t 后再方差标准化，避免极端尾部导致数值不稳定。
+
+噪声类型：
+
+- W1：标准高斯噪声。
+- W2：对称双峰混合高斯，标准化到方差 1。
+- W3：非对称混合高斯，标准化到方差 1。
+- W4：截断 Student-t 噪声，标准化到方差 1。
+- W5：均匀噪声，方差为 1。
+- W6：三峰混合高斯，标准化到方差 1。
+
+Oracle 只对 W1-W6 有定义，因为这些噪声有明确真实分布。
+
+---
+
+## 四、历史数据集
+
+### 4.1 样本量
+
+历史数据集支持以下样本量：
+
+$$
 N\in\{10,20,50,100,200,500,1000\}.
-\]
+$$
 
-### 2.4.2 每个配置的数据集生成
+当前主实验默认使用
 
-对每个 `(control_mode, noise_id, N)`：
+$$
+N_{\mathrm{main}}=100.
+$$
 
-1. 采样 \(\hat z_{k,i}=(\hat x_{k,i},\hat u_{k,i})\)；
-2. 用真实系统推进得到 \(\hat x_{k+1,i}\)；
-3. 计算经验噪声
-   \[
-   \hat w_{k,i}=\hat x_{k+1,i}-\bar f_k(\hat z_{k,i}).
-   \]
-4. 为 \(k=0,\dots,31\) 分步保存 \(\hat w_{k,1:N}\) 与锚点 \(\hat x^{pred}_{k,i}=\bar f_k(z_k)+\hat w_{k,i}\)。
+### 4.2 数据集目录
 
-## 2.5 \(\gamma_0(z)\) 设定（用于 W-DRPP Lower）
+默认数据集目录为
 
-固定采用 DRPP.pdf 的饱和型函数：
-\[
-\gamma_0(z)=\min\{0.3\|z\|_2,\ 5\}\cdot \Delta t^2,\quad \Delta t=1.
-\]
-对应单步半径项（1D）：
-\[
-R_i(z)=\sqrt{\gamma_0(z)}+\sqrt{\gamma_0(\hat z_{k,i})}.
-\]
-
-说明：该项在本轮实验中不再作为可调超参数，直接按上式实现。
-
-### 2.5.1 Wasserstein 半径 \(\varepsilon_N(\beta)\)（严格按 Theorem 3.4 / 式 (8)）
-
-固定置信参数 \(\beta=0.05\)（即 95% 覆盖概率），按文献式 (8)：
-\[
-\varepsilon_N(\beta)=
-\begin{cases}
-\left(\dfrac{\log(c_1/\beta)}{c_2 N}\right)^{1/\max\{m,2\}}, & N \ge \dfrac{\log(c_1/\beta)}{c_2},\\[8pt]
-\left(\dfrac{\log(c_1/\beta)}{c_2 N}\right)^{1/a}, & N < \dfrac{\log(c_1/\beta)}{c_2}.
-\end{cases}
-\]
-
-本实验是一维问题（\(m=1\)），因此上式第一支指数为 \(1/2\)。
-
-实现要求：
-
-1. 对每个样本量 \(N\) 计算一次 \(\varepsilon_N(0.05)\)；  
-2. 同一 \(N\) 下所有方法/所有 Monte Carlo 复用该半径；  
-3. 在 `experiment_config.yaml` 中显式记录 `beta, a, c1, c2, epsilon_N`。  
-4. 常数 `a, c1, c2` 的实现方式固定为：**按文献 [21]（Theorem 2）证明中的保守常数公式自动计算**（不手动指定常数）。
-
-## 2.6 方法实现与接口规范
-
-### 2.6.1 方法清单
-
-1. `noise_drpp`（Moment-DRPP / Noise-DRPP）  
-2. `kde`  
-3. `empirical`  
-4. `oracle`  
-5. `wdrpp_upper`（尖顶核，Thm1）  
-6. `wdrpp_lower`（平顶核，Thm2）  
-7. `eig_drpp`（占位接口，返回 NotImplemented 或跳过标记）
-
-### 2.6.2 统一预测接口（建议）
-
-```python
-class Predictor:
-    def fit(self, historical_dataset, config): ...
-    def predict_pdf(self, x_grid, context): ...
-    def logpdf(self, x, context): ...
+```text
+datasets_1d_wdrpp/
 ```
 
-其中 `context` 至少包含 \((k,x_k,u_k)\)。
-
-### 2.6.3 W-DRPP 求解器复用规范
-
-直接调用现有 `src/solvers/drpp_1d_exact_solver.py`：
-
-- `wdrpp_upper`：调用 `solve_drpp_1d_exact(centers, epsilon, radii=None)`；
-- `wdrpp_lower`：调用 `solve_drpp_1d_exact(centers, epsilon, radii=R_i)`；
-- 统一使用返回对象 `DRPP1DSolution` 的 `pdf(x)` / `log_pdf(x)` 接口评估打分。
-
-### 2.6.4 KDE 带宽推荐（本轮固定）
-
-采用 Gaussian kernel，并在每个时间步 \(k\) 基于历史噪声样本 \(\{\hat w_{k,i}\}_{i=1}^{N}\) 计算：
-\[
-h_k = 0.9 \cdot \min\!\left(\hat\sigma_k,\ \frac{\operatorname{IQR}_k}{1.34}\right)\cdot N^{-1/5}.
-\]
-
-数值稳健处理：
-
-1. 若 \(\hat\sigma_k\) 与 IQR 同时接近 0，则设 \(h_k = 10^{-3}\)；  
-2. 对每个 \(k\) 仅计算一次 \(h_k\)，并在该配置下全部 Monte Carlo 试验中复用。  
-
-说明：该规则对非高斯/重尾样本比普通 Silverman 更稳健，且无需手工调参。
-
-### 2.6.5 Oracle 实现口径（本轮固定）
-
-Oracle 必须直接使用真实噪声分布 \(P_w\)：
-\[
-p^{\text{oracle}}_k(x\mid z_k)=p_w\!\left(x-f_{\text{true}}(z_k)\right),
-\]
-其中 \(f_{\text{true}}(z_k)=\sin(x_k)+0.5u_k\)。
-
-对 Log-Score 评估时，统一使用
-\[
-\log p^{\text{oracle}}_k(x_{k+1})
-\]
-作为 Oracle 分数，不允许用 KDE/经验分布近似替代 Oracle。
-
-## 2.7 评价指标与统计口径
-
-仅使用 Log-Score：
-\[
-\mathrm{LS}_{k}^{(m)}=\log \hat p_k^{(m)}(x_{k+1}^{(m)}),
-\]
-\[
-\overline{\mathrm{LS}}_k=\frac1M\sum_{m=1}^{M}\mathrm{LS}_{k}^{(m)},\quad M=1000,\ k=0,\dots,31\ (\text{共 }32\text{ 步}).
-\]
-
-输出两类统计：
-
-1. **逐步曲线**：每种方法一条 \(\overline{\mathrm{LS}}_k\) 曲线；  
-2. **整体汇总**：\(\frac1{32}\sum_k \overline{\mathrm{LS}}_k\)。
-
-## 2.8 Monte Carlo 试验流程
-
-对每个 `(control_mode, noise_id)`：
-
-1. 固定 \(N=100\)（对齐原实验 2 主设置），固定主随机种子 `seed_master=20260412`；  
-2. 重复 \(m=1,\dots,1000\)：  
-   - 从同一单值初始状态 \(x_0=2.0\) 起步；
-   - 第 \(m\) 次重复的随机种子由主种子派生（如 `seed_m = seed_master + m`）；
-   - 运行 \(k=0,\dots,31\) 共 32 步真实轨迹；
-   - 每步由各方法给出一步预测并记录 log-score；  
-3. 统计各方法逐步均值曲线与总体均值。
-
-## 2.9 文件与目录规范（必须落盘）
-
-### 2.9.1 数据集目录（单独文件夹）
+目录结构为
 
 ```text
 datasets_1d_wdrpp/
   systemC/
     control_zero/
       noise_W1/
-      ...
-      noise_W6/
         N_010/
-        N_020/
-        ...
-        N_1000/
           step_00.csv
           ...
           step_31.csv
+      ...
+      noise_W6/
     control_pid/
       noise_W1/
       ...
       noise_W6/
-        N_010/
-        N_020/
-        ...
-        N_1000/
-          step_00.csv
-          ...
-          step_31.csv
 ```
 
-### 2.9.2 结果目录（每次实验时间戳）
+每个 `step_kk.csv` 至少包含当前状态、控制输入、下一状态和经验残差等字段。
+
+### 4.3 数据集生成与复用
+
+默认运行会先生成历史数据集，再运行评估。
+
+若已有数据集，可使用：
+
+```powershell
+python -m src.runner.exp2_systemC --skip-dataset-build
+```
+
+如果修改了系统动力学、控制器、噪声定义、随机种子或样本量，不应复用旧数据集。
+
+---
+
+## 五、Wasserstein 半径与模型误差半径
+
+### 5.1 Wasserstein 半径
+
+Wasserstein 半径由 `src/radius/wasserstein_radius.py` 计算，采用 Theorem 3.4 / Eq.(8) 风格的有限样本半径：
+
+$$
+\varepsilon_N(\beta)=
+\begin{cases}
+\left(\dfrac{\log(c_1/\beta)}{c_2 N}\right)^{1/\max\{m,2\}},
+& N \ge \dfrac{\log(c_1/\beta)}{c_2},\\[8pt]
+\left(\dfrac{\log(c_1/\beta)}{c_2 N}\right)^{1/a},
+& N < \dfrac{\log(c_1/\beta)}{c_2}.
+\end{cases}
+$$
+
+当前默认参数为：
+
+- $\beta=0.05$；
+- $m=1$；
+- $a=1.5$；
+- $c_1=2.0$；
+- $c_2=1.0$。
+
+这些参数可以通过命令行覆盖：
+
+```powershell
+python -m src.runner.exp2_systemC --beta 0.05 --a 1.5 --c1 2.0 --c2 1.0
+```
+
+### 5.2 模型误差函数
+
+W-DRPP lower 使用模型误差函数
+
+$$
+\gamma_0(z)=\min\{0.3\|z\|_2,5\},
+\qquad z=(x,u).
+$$
+
+当前代码中 `dt=1`，因此不额外乘时间步缩放。
+
+一维 lower 的样本半径形式为
+
+$$
+R_i(z)=\sqrt{\gamma_0(z)}+\sqrt{\gamma_0(\hat z_{k,i})}.
+$$
+
+代码实现中，为减少重复求解，`wdrpp_lower` 会对当前半径做量化缓存，量化粒度由 `lower_r_quant` 控制，默认 `0.02`。
+
+---
+
+## 六、预测方法
+
+当前主实验使用以下 predictor。
+
+### 6.1 Nominal
+
+`nominal` 使用固定高斯噪声模型：
+
+$$
+x_{k+1}\mid z_k \sim \mathcal N(\bar f_k(z_k),1).
+$$
+
+实现文件：`src/predictors/nominal.py`。
+
+### 6.2 Noise-DRPP
+
+`noise_drpp` 是 Moment-DRPP / Noise-DRPP baseline。当前实现基于每个 step 的历史残差均值和方差构造单峰高斯预测器，并使用方差放大参数 `gamma2_noise_drpp`。
+
+实现文件：`src/predictors/noise_drpp.py`。
+
+### 6.3 KDE
+
+`kde` 使用历史残差构造 Gaussian kernel density estimator。带宽采用稳健 Silverman 规则。
+
+实现文件：`src/predictors/kde.py`。
+
+### 6.4 Oracle
+
+`oracle` 使用 W1-W6 的真实噪声分布计算真实一步条件密度。
+
+Oracle 只参与 W1-W6 常规实验，不参与 W7 adversary，因为 W7 不是一个预先给定的真实噪声分布。
+
+实现文件：`src/predictors/oracle.py`。
+
+### 6.5 W-DRPP Upper
+
+`wdrpp_upper` 使用尖顶核，对应 $\gamma_0\equiv0$ 的上界构造。
+
+实现入口：`src/predictors/wdrpp.py` 中的 `WDRPPUpperPredictor`。
+
+求解器由 `--wdrpp-solver-mode` 控制：
+
+- `exact`：调用 `src/solvers/drpp_1d_exact_solver.py`；
+- `lse`：调用 `src/solvers/drpp_lse_solver.py`。
+
+### 6.6 W-DRPP Lower
+
+`wdrpp_lower` 使用平顶核，并包含模型误差半径。
+
+实现入口：`src/predictors/wdrpp.py` 中的 `WDRPPLowerPredictor`。
+
+求解器同样由 `--wdrpp-solver-mode` 控制。
+
+### 6.7 Eig-DRPP 接口
+
+当前只保留 `src/predictors/eig_drpp_interface.py` 作为接口占位，不纳入主实验曲线和汇总表。
+
+### 6.8 不再纳入当前主实验的方法
+
+早期方案中的 `empirical` 目前未作为当前主实验方法实现和绘图。若后续需要恢复，应新增 `src/predictors/empirical.py` 并补齐统一 `logpdf` 接口。
+
+---
+
+## 七、常规 W1-W6 实验流程
+
+对每个控制方式
+
+$$
+\text{control\_mode}\in\{\text{zero},\text{pid}\}
+$$
+
+和每个噪声
+
+$$
+\text{noise\_id}\in\{W1,W2,W3,W4,W5,W6\}
+$$
+
+执行以下步骤：
+
+1. 读取或生成对应历史数据集；
+2. 构造 `nominal`、`noise_drpp`、`kde`、`oracle`、`wdrpp_upper`、`wdrpp_lower`；
+3. 从 $x_0=2.0$ 开始生成 Monte Carlo 测试轨迹；
+4. 对每个 step $k=0,\dots,31$ 记录各 predictor 的 log-score；
+5. 汇总均值、标准差、2.5% 分位数和 97.5% 分位数；
+6. 每个 `(control_mode, noise_id)` 输出一张逐步曲线图。
+
+默认 Monte Carlo 次数：
+
+$$
+M=1000.
+$$
+
+运行命令：
+
+```powershell
+python -m src.runner.exp2_systemC --m 1000 --steps 32 --n-main 100
+```
+
+---
+
+## 八、W7 Adversary 压力测试
+
+### 8.1 定位
+
+W7 adversary 是一个额外压力测试，不是自然噪声分布。
+
+当前 W7 的定义是：
+
+- 按控制方式分别构造；
+- 按 step 分别构造；
+- 每个 step pooled W1-W6 的历史残差；
+- 在 pooled 经验分布的 Wasserstein 球内寻找最坏残差分布；
+- 当前 common adversary 的目标 predictor 固定为 `wdrpp_upper`；
+- 用同一个 adversarial 分布评价所有非 Oracle 方法。
+
+因此 W7 图不应解释为“第七种真实噪声分布下的普通泛化性能”，而应解释为“针对 `wdrpp_upper` 构造的 Wasserstein stress test”。
+
+### 8.2 Pooled 数据
+
+对固定控制方式和固定 step，令
+
+$$
+\mathcal D_k^{pool}
+=
+\mathcal D_k^{W1}\cup\mathcal D_k^{W2}\cup\cdots\cup\mathcal D_k^{W6}.
+$$
+
+若主样本量为 $N_{\mathrm{main}}$，则 pooled 样本量为
+
+$$
+N_{pool}=6N_{\mathrm{main}}.
+$$
+
+该设计由命令行参数控制：
+
+```powershell
+--adversary-source-noises W1,W2,W3,W4,W5,W6
+```
+
+后续若希望只使用部分噪声构造 W7，例如 W2/W3/W6，可改为：
+
+```powershell
+python -m src.runner.exp2_systemC --adversary-source-noises W2,W3,W6
+```
+
+### 8.3 支撑区间
+
+为避免 adversary 在全空间上把少量质量搬到极远尾部，当前代码使用有限残差支撑区间。
+
+对固定 step，支撑区间由 pooled 残差范围加 padding 得到：
+
+$$
+[\min_i \hat w_i - B_k,\ \max_i \hat w_i + B_k].
+$$
+
+其中 padding 近似为
+
+$$
+B_k
+=
+c_B\left(\operatorname{std}(\hat w)+\varepsilon_{pool}+r_k\right),
+$$
+
+默认 $c_B=2.0$，由 `--adversary-support-scale` 控制。
+
+### 8.4 离散 Wasserstein LP
+
+给定经验源点 $\hat w_i$ 和目标网格点 $y_j$，令 $\pi_{ij}$ 表示从 $\hat w_i$ 搬运到 $y_j$ 的质量。当前 W7 使用线性规划：
+
+$$
+\min_{\pi_{ij}\ge0}
+\sum_{i=1}^{N_s}\sum_{j=1}^{M_g}
+\pi_{ij}\ell_{\hat p,z}(y_j)
+$$
+
+subject to
+
+$$
+\sum_{j=1}^{M_g}\pi_{ij}=\frac1{N_s},
+\qquad i=1,\dots,N_s,
+$$
+
+$$
+\sum_{i=1}^{N_s}\sum_{j=1}^{M_g}
+\pi_{ij}|y_j-\hat w_i|
+\le
+\varepsilon_{pool}.
+$$
+
+其中损失为目标 predictor 的 log-score：
+
+$$
+\ell_{\hat p,z}(w)
+=
+\log \hat p(\bar f(z)+w\mid z).
+$$
+
+这里使用最小化，是因为 log-score 越低表示预测越差。LP 得到的最坏网格分布为
+
+$$
+q_j^{adv}=\sum_i\pi_{ij}^*.
+$$
+
+### 8.5 当前 W7 输出
+
+W7 每个控制方式输出一张图：
 
 ```text
-results_1d_wdrpp/
-  run_YYYYMMDD_HHMMSS/
-    experiment_config.yaml
-    requirement_trace.md
-    summary_table.csv
-    per_step_scores.csv
-    figures/
-      score_curves_control_zero_noise_W1.png
-      ...
-      score_curves_control_pid_noise_W6.png
+score_curves_control_zero_noise_W7_adversary.png
+score_curves_control_pid_noise_W7_adversary.png
 ```
 
-其中：
+W7 图中包含：
 
-- `experiment_config.yaml`：记录系统、控制、噪声、N、M、`x0=2.0`、`seed_master=20260412`、`beta=0.05`、`a/c1/c2`、`epsilon_N`、`gamma0`、随机种子派生规则；
-- `requirement_trace.md`：记录本次运行如何对应本方案要求；
-- `per_step_scores.csv`：列建议为  
-  `step, method, mean_logscore, std_logscore, control_mode, noise_id`。
+- `nominal`
+- `noise_drpp`
+- `kde`
+- `wdrpp_upper`
+- `wdrpp_lower`
 
-## 2.10 可视化要求（强制）
+W7 不包含 `oracle`。
 
-每个 `(control_mode, noise_id)` 生成一张图：
+W7 的逐步 score 是对离散 adversarial 分布的加权期望，不是 Monte Carlo 重复统计。因此当前实现中 W7 的 `q025_logscore` 与 `q975_logscore` 等于均值。
 
-- 横轴：`step = 0..31`
-- 纵轴：`mean log-score`
-- 多条线：`noise_drpp, kde, empirical, oracle, wdrpp_upper, wdrpp_lower`
-- 图例与标题完整，标明 `M=1000`、`N=100`。
+### 8.6 W7 数值注意事项
 
-## 2.11 代码落地建议（用于后续“生成所有代码”）
+W7 对求解器更敏感。若使用 `--wdrpp-solver-mode exact`，小样本或尖锐 adversary 网格可能导致 `wdrpp_upper` 求解失败，并出现极端正 log-score。此时图像会被异常值拉伸，不能解释为方法优势。
 
-建议代码模块结构：
+正式分析 W7 前必须检查：
+
+- 结果目录是否完整生成了 `per_step_scores.csv` 与 `summary_table.csv`；
+- 图中是否出现 $10^6$ 或 $10^9$ 量级异常 log-score；
+- WDRPP 求解器是否返回失败解；
+- W7 的结果是否只作为 stress test，而非普通噪声实验。
+
+建议 W7 首先使用 LSE 模式：
+
+```powershell
+python -m src.runner.exp2_systemC --wdrpp-solver-mode lse --adversary-grid-size 400 --adversary-source-samples 120
+```
+
+---
+
+## 九、评价指标与统计口径
+
+唯一评价指标为 log-score。
+
+对普通 W1-W6 Monte Carlo 实验，单次评分为
+
+$$
+\mathrm{LS}_{k}^{(m)}
+=
+\log \hat p_k(x_{k+1}^{(m)}\mid x_k^{(m)},u_k^{(m)}).
+$$
+
+逐步均值为
+
+$$
+\overline{\mathrm{LS}}_k
+=
+\frac1M\sum_{m=1}^{M}\mathrm{LS}_{k}^{(m)}.
+$$
+
+总体汇总分数为
+
+$$
+\overline{\mathrm{LS}}
+=
+\frac1{32}\sum_{k=0}^{31}\overline{\mathrm{LS}}_k.
+$$
+
+对 W7 adversary，逐步分数为
+
+$$
+\mathrm{ALS}_{k}(\hat p)
+=
+\sum_j q_{k,j}^{adv}
+\log \hat p_k(\bar f_k(z_k)+y_j\mid z_k).
+$$
+
+---
+
+## 十、输出目录与文件
+
+默认结果目录为
+
+```text
+results_1d_wdrpp/run_YYYYMMDD_HHMMSS/
+```
+
+主要输出文件：
+
+- `experiment_config.yaml`：本次实验配置。
+- `requirement_trace.md`：本次运行对应的需求追踪。
+- `per_step_scores.csv`：逐步分数。
+- `summary_table.csv`：总体汇总。
+- `figures/*.png`：曲线图。
+
+`per_step_scores.csv` 当前列为：
+
+```text
+control_mode,noise_id,step,method,mean_logscore,std_logscore,q025_logscore,q975_logscore
+```
+
+`summary_table.csv` 当前列为：
+
+```text
+control_mode,noise_id,method,overall_mean_logscore
+```
+
+常规 W1-W6 图像共 12 张：
+
+$$
+2\ \text{control modes}\times 6\ \text{noise types}=12.
+$$
+
+若启用 W7 adversary，会额外生成 2 张图，因此总图像数为 14 张。
+
+---
+
+## 十一、代码结构
+
+当前代码结构如下：
 
 ```text
 src/
-  systems/system_c.py
-  controllers/{zero.py,pid.py}
-  controllers/pid_tuning.py
-  noise_lib/noise_w1_w6.py
-  data/build_dataset.py
+  config.py
+  systems/
+    system_c.py
+  controllers/
+    zero.py
+    pid.py
+    pid_tuning.py
+  noise_lib/
+    noise_w1_w6.py
+  data/
+    build_dataset.py
   predictors/
+    common.py
+    nominal.py
     noise_drpp.py
     kde.py
-    empirical.py
     oracle.py
+    wdrpp.py
     wdrpp_upper.py
     wdrpp_lower.py
     eig_drpp_interface.py
-  eval/logscore.py
-  runner/exp2_systemC.py
-  viz/plot_per_step_scores.py
+  solvers/
+    drpp_1d_exact_solver.py
+    drpp_lse_solver.py
+  radius/
+    wasserstein_radius.py
+  eval/
+    logscore.py
+  viz/
+    plot_per_step_scores.py
+  runner/
+    exp2_systemC.py
 ```
 
-其中 `predictors/wdrpp_upper.py` 与 `predictors/wdrpp_lower.py` 必须直接导入并复用 `src/solvers/drpp_1d_exact_solver.py`，禁止重复拷贝实现。
+核心入口：
 
-并通过单一入口脚本运行，例如：
-
-```bash
-python -m src.runner.exp2_systemC --m 1000 --steps 32 --save_dir results_1d_wdrpp
+```powershell
+python -m src.runner.exp2_systemC
 ```
 
 ---
 
-## 三、当前未提及但必须补充的执行细节（建议在代码阶段固定）
+## 十二、推荐运行配置
 
-1. 初始状态固定为单值 \(x_0=2.0\)；  
-2. 统一主随机种子固定为 `seed_master=20260412`（各子任务种子按固定规则派生）；  
-3. Oracle 仅允许按真实噪声分布解析密度实现（不使用采样近似）；  
-4. W-DRPP 求解器超参数（容差、最大迭代数、失败重试策略）；  
-5. 对异常值（logpdf 下溢）统一截断规则（如 `logpdf >= -1e6`）。
+### 12.1 常规正式实验
+
+```powershell
+python -m src.runner.exp2_systemC --m 1000 --steps 32 --n-main 100 --wdrpp-solver-mode lse
+```
+
+说明：当前 W7 已默认启用。若要只做 W1-W6，添加 `--skip-adversary`。
+
+### 12.2 只做代码连通性检查
+
+```powershell
+python -m src.runner.exp2_systemC --m 10 --n-main 10 --wdrpp-solver-mode lse --adversary-grid-size 30 --adversary-source-samples 10
+```
+
+该配置只能验证代码能跑通，不能作为正式实验结论。
+
+### 12.3 复用已有数据集
+
+```powershell
+python -m src.runner.exp2_systemC --skip-dataset-build --m 1000 --n-main 100 --wdrpp-solver-mode lse
+```
 
 ---
 
-## 四、结论
+## 十三、当前实现与早期设计的差异
 
-该设计满足“先写实验文档、评估合理性与缺陷、暂不写代码”的要求，并已给出可直接映射为代码工程的目录结构、数据结构、统计口径与可视化规范。后续实现阶段可按本文件逐模块落地。
+1. 早期设计提到 LQR，当前实现使用 PID。
+2. 早期设计包含 Empirical，当前主实验未实现该方法。
+3. 早期设计要求 Eig-DRPP 预留接口，当前已保留接口但不参与实验。
+4. 早期设计只覆盖 W1-W6，当前增加 W7 adversary。
+5. 早期设计只强调 exact 求解器，当前代码支持 `exact` 与 `lse`。
+6. 早期设计未区分训练种子和评估种子，当前固定为 `dataset_seed_master=20260412` 与 `eval_seed_master=30260412`。
+7. 早期设计未说明 W7 没有 Oracle，当前明确 W7 不绘制 Oracle。
+8. 早期设计未说明 incomplete run 风险；当前要求若结果目录缺少 CSV，则不能视为完整实验。
+
+---
+
+## 十四、实验解释原则
+
+解释 W1-W6 时，应优先看 `summary_table.csv` 的总体均值，再结合逐步曲线分析特定 step 的行为。
+
+解释 W7 时，必须说明：
+
+- W7 是针对 `wdrpp_upper` 的 common adversary；
+- W7 不是真实噪声分布；
+- W7 不存在 Oracle；
+- W7 分数是加权期望，不是 Monte Carlo 平均；
+- 若图中出现极端正值，优先怀疑求解器失败。
+
+论文或报告中不应把 W7 的 common adversary 结果表述为“所有方法在同一个自然噪声分布下的泛化性能”。更准确的表述是：
+
+> 在由 pooled W1-W6 经验残差诱导的 Wasserstein 球内，构造一个针对 W-DRPP upper 的受限最坏残差分布，并在该共同压力场景下比较各方法的 log-score。
+
