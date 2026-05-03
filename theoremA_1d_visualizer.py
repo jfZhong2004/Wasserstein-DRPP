@@ -308,7 +308,7 @@ def main() -> None:
 
     with st.sidebar:
         st.header("参数设置")
-        n = st.slider("样本个数 N", min_value=1, max_value=5, value=3, step=1)
+        n = st.slider("样本个数 N", min_value=1, max_value=10, value=3, step=1)
         slider_min = st.number_input("样本滑动条最小值", value=-5.0, step=0.5)
         slider_max = st.number_input("样本滑动条最大值", value=5.0, step=0.5)
         if slider_max <= slider_min:

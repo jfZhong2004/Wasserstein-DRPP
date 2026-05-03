@@ -70,6 +70,12 @@ class ExperimentConfig:
     wdrpp_lse_mc_seed: int = 20260501
     wdrpp_lse_maxiter: int = 300
     wdrpp_lse_tol: float = 1e-8
+    adversary_enabled: bool = True
+    adversary_noise_id: str = "W7_adversary"
+    adversary_source_noise_ids: List[str] = field(default_factory=lambda: ["W1", "W2", "W3", "W4", "W5", "W6"])
+    adversary_grid_size: int = 400
+    adversary_source_samples: int = 120
+    adversary_support_scale: float = 2.0
     plot_y_q_low: float = 0.02
     plot_y_q_high: float = 0.98
     plot_y_padding_ratio: float = 0.1

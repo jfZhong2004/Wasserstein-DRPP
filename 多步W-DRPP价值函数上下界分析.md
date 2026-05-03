@@ -69,7 +69,39 @@ $$
 
 ### 2.3 多步上界的递推构造
 
-**关键挑战：** 与 DRPP.pdf 中矩模糊集下的 Noise-DRPP 不同（其单步最优值 $-\frac{1}{2}[d_x\log(2\pi) + d_x + \log\det(\gamma_2\bar{\Sigma}_k)]$ 不依赖于 $z$，可以直接递推求和），Wasserstein 模糊集下定理 1 的单步最优值**一般依赖于 $z$**（因为预测锚点 $\hat{x}_i^{pred}$ 和经验噪声样本 $\hat{w}_{k,i}$ 都依赖于当前状态）。
+#### 方法 A0（严格可证且可计算）：$\gamma_0\equiv0$ 的 Bellman 反向递推
+
+令 $\gamma_0\equiv0$ 上界问题的 Bellman 算子为
+$$
+(\mathcal T_k^{up} v)(z):=
+\sup_{\hat p_k\in\mathcal F}\inf_{P\in\mathbb B_\varepsilon(\hat P_{N,z}^{pred})}
+\mathbb E_P[\log \hat p_k(X)+v(X)].
+$$
+定义
+$$
+V_T^{up}\equiv0,\qquad
+V_k^{up}(z):=(\mathcal T_k^{up}V_{k+1}^{up})(z).
+$$
+由模糊集包含关系 $\mathcal I_k^W|_{\gamma_0=0}\subset\mathcal I_k^{W,strict}$，对所有 $k,z$ 有
+$$
+V_k^{strict}(z)\le V_k^{up}(z).
+$$
+因此这是一个严格上界。
+
+进一步，对固定 continuation $v$，其有限维化可写为
+$$
+\max_{\lambda\ge0,\mathbf s}
+\left\{-\lambda\varepsilon+\frac1N\sum_{i=1}^Ns_i\right\}
+$$
+$$
+\text{s.t.}\quad
+\int_{\mathcal X} e^{-v(x)}
+\max_i\exp\!\big(s_i-\lambda\|x-\hat x_{i}^{pred}(z)\|\big)\,dx\le1.
+$$
+该子问题保持凸性（目标仿射、约束函数凸），可用于每一步数值求解并反向递推。  
+这就是“严格可证 + 可计算”的多步上界方法；在实现上通常需配合状态离散或函数逼近来表示 $V_{k+1}^{up}$。
+
+**关键挑战：** 与 DRPP.pdf 中矩模糊集下的 Noise-DRPP 不同（其单步最优值 $-\frac{1}{2}[d_x\log(2\pi) + d_x + \log\det(\gamma_2\bar{\Sigma}_k)]$ 不依赖于 $z$，可以直接递推求和），Wasserstein 模糊集下**完整 Bellman 子问题**通常依赖于 $z$：一方面预测锚点 $\hat{x}_i^{pred}(z)=\bar f_k(z)+\hat w_{k,i}$ 随当前状态平移，另一方面 continuation 项 $V_{k+1}$ 会以权重 $e^{-V_{k+1}(x)}$ 进入积分约束。因此若直接处理函数型 continuation，一般仍需逐状态求解；只有在把 continuation 进一步保守化为常数时，才可利用平移不变性消去 $z$ 依赖。
 
 #### 方法 A：直接贪心递推（忽略未来价值函数）
 
@@ -245,11 +277,132 @@ $$
 
 该上界是显式可算的，但通常比 (C5) 更保守。
 
+**(vi) 常数 continuation 的严格无 $z$ 递推**
+
+上面的 (C5) 仍需估计 $\bar J_t=\sup_z J_t^{nom}(z)$。在当前 Wasserstein 设定下，还可直接利用“常数 continuation + 平移不变性”构造一族不依赖 $z$ 的阶段常数上界。记
+$$
+\hat w_{t,i}:=\hat x_{t+1,i}-\bar f_t(\hat z_{t,i}),\qquad
+\hat x_{t,i}^{pred}(z)=\bar f_t(z)+\hat w_{t,i}.
+$$
+
+**命题（上界的常数递推）.** 设 $\mathcal X=\mathbb R^{d_x}$。定义阶段常数值
+$$
+u_t^{\mathrm{const}}
+:=
+\sup_{\lambda\ge0,\mathbf s\in\mathbb R^N}
+\left\{-\lambda\varepsilon_t+\frac1N\sum_{i=1}^Ns_i\right\}
+$$
+$$
+\text{s.t.}\quad
+\int_{\mathbb R^{d_x}}
+\max_{1\le i\le N}
+\exp\!\big(s_i-\lambda\|y-\hat w_{t,i}\|\big)\,dy\le1.
+\tag{C7}
+$$
+则对任意常数 $c\in\mathbb R$ 与任意状态 $z$，有
+$$
+(\mathcal T_t^{up}c)(z)=c+u_t^{\mathrm{const}}.
+$$
+进一步定义常数递推
+$$
+U_T^{\mathrm{const}}:=0,\qquad
+U_t^{\mathrm{const}}:=u_t^{\mathrm{const}}+U_{t+1}^{\mathrm{const}},
+$$
+则对所有 $t,z$ 都有
+$$
+V_t^{strict}(z)\le U_t^{\mathrm{const}}
+=\sum_{j=t}^{T-1}u_j^{\mathrm{const}}.
+\tag{C8}
+$$
+
+**证明要点：**
+1. 对常数 continuation $v\equiv c$，方法 A0 的有限维约束为
+   $$
+   \int_{\mathbb R^{d_x}}e^{-c}
+   \max_i\exp\!\big(s_i-\lambda\|x-\hat x_{t,i}^{pred}(z)\|\big)\,dx\le1.
+   $$
+2. 令 $r_i:=s_i-c$，则目标值变为
+   $$
+   c-\lambda\varepsilon_t+\frac1N\sum_i r_i.
+   $$
+3. 再作变量代换 $y:=x-\bar f_t(z)$，并用
+   $$
+   \hat x_{t,i}^{pred}(z)=\bar f_t(z)+\hat w_{t,i},
+   $$
+   约束恰化为 (C7)，故 $(\mathcal T_t^{up}c)(z)=c+u_t^{\mathrm{const}}$，且右端与 $z$ 无关。
+4. Bellman 算子 $\mathcal T_t^{up}$ 具有单调性：若 $v_1\le v_2$，则
+   $$
+   \mathcal T_t^{up}v_1\le \mathcal T_t^{up}v_2.
+   $$
+   因而由 $V_t^{strict}\le V_t^{up}$ 与反向归纳，
+   $$
+   V_t^{strict}(z)
+   \le V_t^{up}(z)
+   =(\mathcal T_t^{up}V_{t+1}^{up})(z)
+   \le (\mathcal T_t^{up}U_{t+1}^{\mathrm{const}})(z)
+   =U_{t+1}^{\mathrm{const}}+u_t^{\mathrm{const}}
+   =U_t^{\mathrm{const}}.
+   $$
+   证毕。$\square$
+
+**推论（保上界 $\tau$-平滑常数递推）.** 令
+$$
+m_\tau^{-}(A_1,\dots,A_N)
+:=
+\frac1\tau\log\sum_{i=1}^N e^{\tau A_i}-\frac{\log N}{\tau},
+\qquad \tau>0,
+$$
+并定义
+$$
+u_{t,\tau}^{\mathrm{const},up}
+:=
+\sup_{\lambda\ge0,\mathbf s\in\mathbb R^N}
+\left\{-\lambda\varepsilon_t+\frac1N\sum_{i=1}^Ns_i\right\}
+$$
+$$
+\text{s.t.}\quad
+\int_{\mathbb R^{d_x}}
+\exp\!\Big(
+m_\tau^{-}(A_{t,1}^{up}(y),\dots,A_{t,N}^{up}(y))
+\Big)\,dy
+\le1,
+\tag{C9}
+$$
+其中
+$$
+A_{t,i}^{up}(y):=s_i-\lambda\|y-\hat w_{t,i}\|.
+$$
+则对每个 $t$ 都有
+$$
+u_t^{\mathrm{const}}\le u_{t,\tau}^{\mathrm{const},up}.
+$$
+若定义
+$$
+U_{T,\tau}^{\mathrm{const},up}:=0,\qquad
+U_{t,\tau}^{\mathrm{const},up}
+:=
+u_{t,\tau}^{\mathrm{const},up}+U_{t+1,\tau}^{\mathrm{const},up},
+$$
+则对所有 $t,z$ 有
+$$
+V_t^{strict}(z)\le U_t^{\mathrm{const}}\le U_{t,\tau}^{\mathrm{const},up}.
+\tag{C10}
+$$
+并且当 $\tau\to\infty$ 时，
+$$
+U_{t,\tau}^{\mathrm{const},up}\downarrow U_t^{\mathrm{const}}.
+$$
+
+> 这里 $\tau$ 的作用是把阶段子问题平滑化以便数值优化；真正消去 $z$ 依赖的原因不是 LSE，而是“continuation 常数化 + $\mathbb R^{d_x}$ 上的平移不变性”。
+
 ### 2.4 上界小结
 
 | 上界方法 | 是否显式 | 是否依赖 $z$ | 紧致程度 |
 |----------|---------|-------------|---------|
+| $\gamma_0=0$ Bellman 递推（方法 A0） | 数值求解 | 是 | 紧（严格上界） |
 | 定理 1 凸优化（单步） | 数值求解 | 是 | 紧（精确单步界） |
+| 常数 continuation 递推（命题 (C8)） | 数值求解 | 否 | 较紧（严格上界） |
+| 常数 continuation + 保上界 $\tau$ 平滑（推论 (C10)） | 数值求解 | 否 | 略松于上一行，计算更稳 |
 | $\sup_z$ 保守化 + 求和 | 需数值 | 否 | 中等 |
 | KR-Lipschitz 理论界（凸性附加时可对接 Thm 6.3） | 显式 | 否 | 松 |
 | KR-Lipschitz + 密度上界假设 (A-M) | **显式闭式** | 否 | 更松 |
@@ -282,7 +435,7 @@ $$
 
 ### 3.2 多步下界的递推困难
 
-与上界面临类似困难：定理 2 的单步最优值依赖于 $z$（通过 $R_i$ 中的 $\gamma_0(z)$ 和预测锚点）。
+与上界面临类似困难：若直接处理完整 Bellman 子问题，则定理 2 的阶段值一般依赖于 $z$，一方面因为 $R_i(z)=\sqrt{\gamma_0(z)}+\sqrt{\gamma_0(\hat z_{t,i})}$ 中含有当前状态，另一方面因为 continuation 项会通过权重 $e^{-v(x)}$ 进入积分约束。不过，一旦先用 $\Gamma_0$ 消去 $R_i(z)$ 的状态依赖，再把 continuation 保守化为常数，就可以像上界一样借助平移不变性得到无 $z$ 的阶段递推。
 
 ### 3.3 是否存在显式或可直接计算的多步下界？
 
@@ -303,18 +456,235 @@ $$
 \bar{R} := \sqrt{\Gamma_0} + \max_{1 \leq i \leq N}\sqrt{\Gamma_{0,i}}
 $$
 
-**命题（Wasserstein 保守多步下界）.** *假设存在 $\Gamma_0 \geq \gamma_0(z), \forall z \in \mathcal{Z}$，且对所有时刻 $t$ 和所有 $z$，将定理 2 中的 $R_i$ 统一替换为 $\bar{R}_t := \sqrt{\Gamma_0} + \max_i \sqrt{\gamma_0(\hat{z}_{t,i})}$，记对应的凸优化最优值为 $L_t(\bar{R}_t)$。则多步下界为：*
-
+**命题（Wasserstein 保守多步下界，修正版）.**  
+假设存在 $\Gamma_0 \ge \gamma_0(z),\forall z\in\mathcal Z$，并令
 $$
-V_k^*(z) \geq \sum_{t=k}^{T-1} L_t(\bar{R}_t)
+\bar R_t:=\sqrt{\Gamma_0}+\max_i\sqrt{\gamma_0(\hat z_{t,i})},
+$$
+从而对任意状态 $z$ 与样本 $i$ 都有 $R_{t,i}(z)\le \bar R_t$。对任意 continuation 函数 $v:\mathcal X\to\mathbb R$，定义保守 Bellman 算子
+$$
+(\mathcal T_t^{\bar R}v)(z):=
+\sup_{\lambda\ge0,\mathbf s}
+\left\{-\lambda\varepsilon_t+\frac1N\sum_{i=1}^Ns_i\right\}
+$$
+$$
+\text{s.t.}\quad
+\int_{\mathcal X}e^{-v(x)}
+\max_i\exp\!\Big(s_i-\lambda[\|x-a_{t,i}(z)\|-\bar R_t]_+\Big)\,dx\le1.
+$$
+再令
+$$
+\underline V_T^{\bar R}\equiv0,\qquad
+\underline V_t^{\bar R}(z):=(\mathcal T_t^{\bar R}\underline V_{t+1}^{\bar R})(z).
+$$
+则对所有 $t,z$ 有
+$$
+\underline V_t^{\bar R}(z)\le V_t^{strict}(z).
 $$
 
-**证明思路：**
-1. 由于 $\bar{R}_t \geq R_i$ 对所有 $i$ 成立，替换后大自然的"免费搬运"半径更大，约束更宽松，最优值更小（更悲观）
-2. 更悲观的单步值不依赖 $z$（仅依赖数据和全局参数），因此可以通过 Bellman 递推直接累加
-3. 每一步的 $L_t(\bar{R}_t)$ 通过求解一个标准的有限维凸优化问题得到
+**证明要点：**
+1. 因为 $\bar R_t\ge R_{t,i}(z)$，有
+   $$
+   [\|x-a\|-\bar R_t]_+\le[\|x-a\|-R_{t,i}(z)]_+,
+   $$
+   故同一 $(\lambda,\mathbf s)$ 下保守模型的被积函数更大，约束更严格，可行域更小，从而
+   $$
+   \mathcal T_t^{\bar R}v\le \mathcal T_t^{low}v\le \mathcal T_t^{strict}v.
+   $$
+2. 严格问题 Bellman 算子单调：若 $v_1\le v_2$，则 $\mathcal T_t^{strict}v_1\le \mathcal T_t^{strict}v_2$。
+3. 反向归纳：已知 $\underline V_{t+1}^{\bar R}\le V_{t+1}^{strict}$，则
+   $$
+   \underline V_t^{\bar R}
+   =\mathcal T_t^{\bar R}\underline V_{t+1}^{\bar R}
+   \le \mathcal T_t^{strict}\underline V_{t+1}^{\bar R}
+   \le \mathcal T_t^{strict}V_{t+1}^{strict}
+   =V_t^{strict}.
+   $$
+   证毕。$\square$
 
-**可计算性：** 每个 $L_t(\bar{R}_t)$ 是定理 2 类型的凸优化问题，仅需数值求解 $N+1$ 维变量 $(\lambda, \mathbf{s})$，使用内点法可高效求解。
+> 说明：旧版“直接写成 $\sum_t L_t(\bar R_t)$”缺少对 continuation 项 $V_{t+1}$ 的处理。严格可证形式应是上述 Bellman 递推下界。只有在额外把 continuation 进一步做常数下界保守化时，才可再化成可加和的常数界。
+
+**可计算性：** 每个时刻对应一个定理 2 型凸优化子问题（变量维度约为 $N+1$），可数值求解并进行反向递推；这是“可直接计算的数值递推下界”，但一般不是全闭式解析和式。
+
+#### 方法 1 的 LSE 松弛扩展（多步下界）
+
+在上式中把逐点 $\max$ 用加性 LSE 松弛：
+$$
+\max_i u_i(x)\le \sum_i u_i(x),
+$$
+定义
+$$
+(\mathcal T_t^{\bar R,\mathrm{LSE}}v)(z):=
+\sup_{\lambda\ge0,\mathbf s}
+\left\{-\lambda\varepsilon_t+\frac1N\sum_i s_i\right\}
+$$
+$$
+\text{s.t.}\quad
+\int_{\mathcal X}e^{-v(x)}
+\sum_i\exp\!\Big(s_i-\lambda[\|x-a_{t,i}(z)\|-\bar R_t]_+\Big)\,dx\le1.
+$$
+则对任意 $v$ 有
+$$
+\mathcal T_t^{\bar R,\mathrm{LSE}}v
+\le
+\mathcal T_t^{\bar R}v
+\le
+\mathcal T_t^{strict}v.
+$$
+定义递推
+$$
+\underline V_T^{\bar R,\mathrm{LSE}}\equiv0,\qquad
+\underline V_t^{\bar R,\mathrm{LSE}}(z):=
+(\mathcal T_t^{\bar R,\mathrm{LSE}}\underline V_{t+1}^{\bar R,\mathrm{LSE}})(z),
+$$
+即可得到多步严格下界
+$$
+\underline V_t^{\bar R,\mathrm{LSE}}(z)\le V_t^{strict}(z).
+$$
+
+与方法 1 相比，它通常更保守，但每步优化更光滑、实现更稳定。需要注意：当 $v\not\equiv0$ 时，约束含权重 $e^{-v(x)}$，一般不再有单步 $v\equiv0$ 时的简单闭式解，通常要配合数值积分（1D 可半解析，高维常用采样）。
+
+#### 方法 1'：常数 continuation 的严格无 $z$ 下界递推
+
+上面的 Bellman 递推仍然保留了函数型 continuation，因此一般仍需逐状态数值求解。若进一步把 continuation 保守化为常数，则可以得到真正不依赖 $z$ 的阶段下界，而且不必再把所有样本半径统一成单个公共 $\bar R_t$。
+
+定义样本依赖的统一半径
+$$
+\bar R_{t,i}:=\sqrt{\Gamma_0}+\sqrt{\gamma_0(\hat z_{t,i})},
+\qquad i=1,\dots,N,
+$$
+则对任意状态 $z$ 都有
+$$
+R_{t,i}(z)=\sqrt{\gamma_0(z)}+\sqrt{\gamma_0(\hat z_{t,i})}\le \bar R_{t,i}.
+$$
+
+对任意 continuation 函数 $v:\mathcal X\to\mathbb R$，定义保守算子
+$$
+(\mathcal T_t^{\bar{\mathbf R}}v)(z):=
+\sup_{\lambda\ge0,\mathbf s}
+\left\{-\lambda\varepsilon_t+\frac1N\sum_{i=1}^Ns_i\right\}
+$$
+$$
+\text{s.t.}\quad
+\int_{\mathcal X}e^{-v(x)}
+\max_i\exp\!\Big(
+s_i-\lambda[\|x-a_{t,i}(z)\|-\bar R_{t,i}]_+
+\Big)\,dx\le1.
+\tag{C11}
+$$
+由 $\bar R_{t,i}\ge R_{t,i}(z)$ 可知，对任意 $v$ 都有
+$$
+\mathcal T_t^{\bar{\mathbf R}}v(z)\le \mathcal T_t^{strict}v(z).
+\tag{C12}
+$$
+
+进一步定义阶段常数值
+$$
+\ell_t^{\mathrm{const}}
+:=
+\sup_{\lambda\ge0,\mathbf s}
+\left\{-\lambda\varepsilon_t+\frac1N\sum_{i=1}^Ns_i\right\}
+$$
+$$
+\text{s.t.}\quad
+\int_{\mathbb R^{d_x}}
+\max_i\exp\!\Big(
+s_i-\lambda[\|y-\hat w_{t,i}\|-\bar R_{t,i}]_+
+\Big)\,dy\le1.
+\tag{C13}
+$$
+
+**命题（下界的常数递推）.** 设 $\mathcal X=\mathbb R^{d_x}$。对任意常数 $c\in\mathbb R$ 与任意状态 $z$，有
+$$
+(\mathcal T_t^{\bar{\mathbf R}}c)(z)=c+\ell_t^{\mathrm{const}}.
+$$
+再定义常数递推
+$$
+L_T^{\mathrm{const}}:=0,\qquad
+L_t^{\mathrm{const}}:=\ell_t^{\mathrm{const}}+L_{t+1}^{\mathrm{const}},
+$$
+则对所有 $t,z$ 都有
+$$
+L_t^{\mathrm{const}}
+=\sum_{j=t}^{T-1}\ell_j^{\mathrm{const}}
+\le V_t^{strict}(z).
+\tag{C14}
+$$
+
+**证明要点：**
+1. 对常数 continuation $v\equiv c$，(C11) 中的约束可写为
+   $$
+   \int_{\mathbb R^{d_x}}e^{-c}
+   \max_i\exp\!\Big(
+   s_i-\lambda[\|x-a_{t,i}(z)\|-\bar R_{t,i}]_+
+   \Big)\,dx\le1.
+   $$
+2. 令 $r_i:=s_i-c$，再作变量代换 $y:=x-\bar f_t(z)$，并用
+   $$
+   a_{t,i}(z)=\bar f_t(z)+\hat w_{t,i},
+   $$
+   约束恰化为 (C13)，从而 $(\mathcal T_t^{\bar{\mathbf R}}c)(z)=c+\ell_t^{\mathrm{const}}$，且右端与 $z$ 无关。
+3. 再利用 Bellman 算子的单调性（若 $v_1\le v_2$，则 $\mathcal T_t^{strict}v_1\le \mathcal T_t^{strict}v_2$），由 (C12) 与反向归纳，
+   $$
+   L_t^{\mathrm{const}}
+   =(\mathcal T_t^{\bar{\mathbf R}}L_{t+1}^{\mathrm{const}})(z)
+   \le (\mathcal T_t^{strict}L_{t+1}^{\mathrm{const}})(z)
+   \le (\mathcal T_t^{strict}V_{t+1}^{strict})(z)
+   =V_t^{strict}(z).
+   $$
+   证毕。$\square$
+
+**推论（保下界 $\tau$-平滑常数递推）.** 令
+$$
+m_\tau^{+}(A_1,\dots,A_N)
+:=
+\frac1\tau\log\sum_{i=1}^N e^{\tau A_i},
+\qquad \tau>0,
+$$
+并定义
+$$
+\ell_{t,\tau}^{\mathrm{const},low}
+:=
+\sup_{\lambda\ge0,\mathbf s}
+\left\{-\lambda\varepsilon_t+\frac1N\sum_{i=1}^Ns_i\right\}
+$$
+$$
+\text{s.t.}\quad
+\int_{\mathbb R^{d_x}}
+\exp\!\Big(
+m_\tau^{+}(A_{t,1}^{low}(y),\dots,A_{t,N}^{low}(y))
+\Big)\,dy\le1,
+\tag{C15}
+$$
+其中
+$$
+A_{t,i}^{low}(y):=
+s_i-\lambda[\|y-\hat w_{t,i}\|-\bar R_{t,i}]_+.
+$$
+则对每个 $t$ 都有
+$$
+\ell_{t,\tau}^{\mathrm{const},low}\le \ell_t^{\mathrm{const}}.
+$$
+若定义
+$$
+L_{T,\tau}^{\mathrm{const},low}:=0,\qquad
+L_{t,\tau}^{\mathrm{const},low}
+:=
+\ell_{t,\tau}^{\mathrm{const},low}+L_{t+1,\tau}^{\mathrm{const},low},
+$$
+则对所有 $t,z$ 有
+$$
+L_{t,\tau}^{\mathrm{const},low}
+\le L_t^{\mathrm{const}}
+\le V_t^{strict}(z).
+\tag{C16}
+$$
+并且当 $\tau\to\infty$ 时，
+$$
+L_{t,\tau}^{\mathrm{const},low}\uparrow L_t^{\mathrm{const}}.
+$$
+
+> 这给出了“基于 $\tau$ 的平滑算法可用于求多步 W-DRPP 的与 $z$ 无关下界”的严格版本：先用 $\Gamma_0$ 把半径统一到 $\bar R_{t,i}$，再对常数 continuation 的阶段子问题使用 $m_\tau^{+}$ 平滑，最后做常数递推。
 
 #### 方法 2：一维情况下的解析下界探索
 
@@ -398,9 +768,12 @@ $$
 
 | 界 | 形式 | 可计算性 | 依赖于 $z$？ | 可否直接递推？ |
 |----|------|---------|-------------|--------------|
-| W-上界（定理 1） | 凸优化 | 数值求解（内点法） | 是 | 需逐状态求解 |
-| W-下界（定理 2） | 凸优化 | 数值求解（内点法） | 是 | 需逐状态求解 |
-| W-保守多步下界 | 凸优化 + $\Gamma_0$ | 数值求解 | 否 | **可以直接求和** |
+| W-上界（定理 1，完整 Bellman） | Bellman递推 + 凸优化 | 数值求解 | 是 | 需逐状态求解 |
+| W-上界（常数 continuation，(C8)） | 阶段凸优化 + 常数递推 | 数值求解 | 否 | **可以直接求和** |
+| W-上界（常数 continuation + 保上界 $\tau$ 平滑，(C10)） | 阶段平滑凸优化 + 常数递推 | 数值求解 | 否 | **可以直接求和** |
+| W-下界（完整 Bellman，$\bar R_t$ / $\bar R_{t,i}$） | Bellman递推 + 凸优化 + $\Gamma_0$ | 数值求解 | 是 | 需逐状态求解 |
+| W-下界（样本依赖 $\bar R_{t,i}$ 的常数 continuation，(C14)） | 阶段凸优化 + 常数递推 + $\Gamma_0$ | 数值求解 | 否 | **可以直接求和** |
+| W-下界（样本依赖 $\bar R_{t,i}$ + $\tau$ 平滑，(C16)） | 阶段平滑凸优化 + 常数递推 + $\Gamma_0$ | 数值求解 | 否 | **可以直接求和** |
 | 矩-上界（Noise-DRPP） | 显式闭式 | 直接计算 | 否 | **可以直接求和** |
 | 矩-下界（Eig-DRPP） | 标量凸优化 | 高效求解 | 否（用 $\Gamma_0$） | **可以直接求和** |
 
@@ -449,6 +822,7 @@ $$
 **关于显式下界的结论：**
 
 - 在 Wasserstein 模糊集设定下，**完全显式的闭式多步下界目前不可得**，主要原因是最优预测分布为非参数的多峰指数核，不像矩模糊集下可以得到高斯闭式解。
-- 但通过 $\Gamma_0$ 保守化（方法 1）可以得到**不依赖 $z$ 的可递推下界**，且每步只需求解一个标准的 $N+1$ 维凸优化问题。
+- 但通过 $\Gamma_0$ 保守化（方法 1）可以得到**严格可证的 Bellman 递推下界**；若再把 continuation 保守化为常数，还可以得到样本依赖半径 $\bar R_{t,i}$ 下的**严格无 $z$ 常数递推下界** (C14)。
+- 在该常数递推基础上使用 $m_\tau^{+}$ 平滑，可得到更易实现的无 $z$ 多步下界 (C16)；代价是通常更保守，但可以从下方逼近 (C14)。
 - 通过高斯次优策略（方案 3a）可能得到介于显式和数值之间的**半解析下界**，这是最有希望产生简洁结果的方向。
 - 矩模糊集下 DRPP.pdf 的 Eig-DRPP 下界方法论（特征向量限制 + $\Gamma_0$ 统一化）提供了构造 Wasserstein 下界的重要参考范式。

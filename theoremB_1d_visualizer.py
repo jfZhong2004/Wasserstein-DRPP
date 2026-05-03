@@ -2,13 +2,20 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import List, Tuple
+from typing import List, Sequence, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
 import streamlit as st
 
 from src.solvers.drpp_1d_exact_solver import solve_drpp_1d_exact
+
+try:
+    from scipy.optimize import minimize
+except ImportError as exc:  # pragma: no cover
+    raise ImportError(
+        "This visualizer requires scipy. Please install it with: pip install scipy"
+    ) from exc
 
 # 运行指令：
 # streamlit run theoremB_1d_visualizer.py
@@ -21,6 +28,17 @@ class RadiusParams:
     a: float = 1.5
     c1: float = 2.0
     c2: float = 1.0
+
+
+@dataclass
+class SmoothLowerApproxSolution:
+    lambda_star: float
+    s_star: List[float]
+    objective_value: float
+    constraint_value: float
+    success: bool
+    message: str
+    iterations: int
 
 
 def epsilon_n_theorem34(n: int, p: RadiusParams) -> float:
@@ -61,6 +79,174 @@ EXP_LOWER = -745.0
 
 def exp_clipped(v: np.ndarray) -> np.ndarray:
     return np.exp(np.clip(v, EXP_LOWER, EXP_UPPER))
+
+
+def _safe_exp_scalar(v: float) -> float:
+    if v > EXP_UPPER:
+        return float("inf")
+    if v < EXP_LOWER:
+        return 0.0
+    return math.exp(v)
+
+
+def _logsumexp_1d(v: np.ndarray) -> float:
+    vmax = float(np.max(v))
+    return vmax + math.log(float(np.sum(np.exp(v - vmax))))
+
+
+def lower_smooth_density_values(
+    x: np.ndarray,
+    centers: Sequence[float],
+    radii: Sequence[float],
+    lam: float,
+    s: Sequence[float],
+    tau: float,
+) -> np.ndarray:
+    if lam <= 0.0:
+        raise ValueError("lambda must be positive.")
+    if tau <= 0.0:
+        raise ValueError("tau must be positive.")
+    c = np.asarray(centers, dtype=float)
+    r = np.asarray(radii, dtype=float)
+    s_arr = np.asarray(s, dtype=float)
+    x_arr = np.asarray(x, dtype=float)
+    if not (len(c) == len(r) == len(s_arr)):
+        raise ValueError("centers/radii/s must have same length.")
+    if np.any(r < 0.0):
+        raise ValueError("radii must be non-negative.")
+
+    u = np.empty((len(c), x_arr.size), dtype=float)
+    for i, (ci, ri, si) in enumerate(zip(c, r, s_arr)):
+        u[i, :] = tau * (si - lam * phi_flat_top_1d(x_arr, ci, ri))
+    umax = np.max(u, axis=0)
+    lse = umax + np.log(np.sum(np.exp(u - umax), axis=0))
+    m_plus = lse / tau
+    return np.exp(np.clip(m_plus, EXP_LOWER, EXP_UPPER))
+
+
+def evaluate_lower_smooth_constraint(
+    centers: Sequence[float],
+    radii: Sequence[float],
+    lam: float,
+    s: Sequence[float],
+    tau: float,
+    interior_grid_points: int = 1201,
+) -> float:
+    if lam <= 0.0:
+        raise ValueError("lambda must be positive.")
+    if tau <= 0.0:
+        raise ValueError("tau must be positive.")
+    c = np.asarray(centers, dtype=float)
+    r = np.asarray(radii, dtype=float)
+    s_arr = np.asarray(s, dtype=float)
+    if not (len(c) == len(r) == len(s_arr)):
+        raise ValueError("centers/radii/s must have same length.")
+
+    x_left = float(np.min(c - r))
+    x_right = float(np.max(c + r))
+
+    left_vals = tau * (s_arr - lam * (c - r))
+    right_vals = tau * (s_arr + lam * (c + r))
+    log_k_left = _logsumexp_1d(left_vals) / tau
+    log_k_right = _logsumexp_1d(right_vals) / tau
+
+    left_tail = _safe_exp_scalar(log_k_left + lam * x_left - math.log(lam))
+    right_tail = _safe_exp_scalar(log_k_right - lam * x_right - math.log(lam))
+
+    interior = 0.0
+    if x_right > x_left:
+        m = max(int(interior_grid_points), 401)
+        x_inner = np.linspace(x_left, x_right, m)
+        y_inner = lower_smooth_density_values(
+            x=x_inner,
+            centers=c,
+            radii=r,
+            lam=lam,
+            s=s_arr,
+            tau=tau,
+        )
+        interior = float(np.trapz(y_inner, x_inner))
+
+    return left_tail + interior + right_tail
+
+
+def solve_lower_smooth_1d(
+    centers: Sequence[float],
+    radii: Sequence[float],
+    epsilon: float,
+    tau: float,
+    initial_lambda: float,
+    initial_s: Sequence[float],
+    interior_grid_points: int = 1201,
+    maxiter: int = 400,
+    tol: float = 1e-8,
+) -> SmoothLowerApproxSolution:
+    if epsilon <= 0.0:
+        raise ValueError("epsilon must be positive.")
+    if tau <= 0.0:
+        raise ValueError("tau must be positive.")
+    if len(centers) == 0:
+        raise ValueError("centers must be non-empty.")
+    if not (len(centers) == len(radii) == len(initial_s)):
+        raise ValueError("centers/radii/initial_s must have same length.")
+
+    n = len(centers)
+    x0 = np.array([max(float(initial_lambda), 1e-6)] + [float(v) for v in initial_s], dtype=float)
+    c = [float(v) for v in centers]
+    r = [float(v) for v in radii]
+
+    def objective(x: np.ndarray) -> float:
+        lam = max(float(x[0]), 1e-8)
+        s_vals = x[1:]
+        return lam * epsilon - float(np.mean(s_vals))
+
+    def objective_grad(_: np.ndarray) -> np.ndarray:
+        return np.array([epsilon] + [-(1.0 / n)] * n, dtype=float)
+
+    def constraint_fun(x: np.ndarray) -> float:
+        lam = max(float(x[0]), 1e-8)
+        s_vals = x[1:]
+        g_val = evaluate_lower_smooth_constraint(
+            centers=c,
+            radii=r,
+            lam=lam,
+            s=s_vals,
+            tau=tau,
+            interior_grid_points=interior_grid_points,
+        )
+        return 1.0 - g_val
+
+    opt = minimize(
+        fun=objective,
+        x0=x0,
+        method="SLSQP",
+        jac=objective_grad,
+        bounds=[(1e-8, None)] + [(None, None)] * n,
+        constraints=[{"type": "ineq", "fun": constraint_fun}],
+        options={"maxiter": maxiter, "ftol": tol, "disp": False},
+    )
+
+    lam_star = max(float(opt.x[0]), 1e-8)
+    s_star = [float(v) for v in opt.x[1:]]
+    g_star = evaluate_lower_smooth_constraint(
+        centers=c,
+        radii=r,
+        lam=lam_star,
+        s=s_star,
+        tau=tau,
+        interior_grid_points=interior_grid_points,
+    )
+    j_star = -lam_star * epsilon + sum(s_star) / n
+
+    return SmoothLowerApproxSolution(
+        lambda_star=lam_star,
+        s_star=s_star,
+        objective_value=j_star,
+        constraint_value=g_star,
+        success=bool(opt.success),
+        message=str(opt.message),
+        iterations=int(getattr(opt, "nit", -1)),
+    )
 
 
 def lse_relaxed_params_1d_flat_top(epsilon: float, radii: List[float]) -> Tuple[float, List[float]]:
@@ -154,6 +340,37 @@ def build_lse_plot(centers: List[float], radii: List[float], epsilon: float) -> 
     return fig, lam_lse, s_lse, j_lse
 
 
+def build_tau_smooth_lower_plot(
+    centers: List[float],
+    radii: List[float],
+    sol: SmoothLowerApproxSolution,
+    tau: float,
+) -> plt.Figure:
+    lam = max(sol.lambda_star, 1e-8)
+    cmin = min(c - r for c, r in zip(centers, radii))
+    cmax = max(c + r for c, r in zip(centers, radii))
+    pad = max(2.0, 6.0 / lam)
+    x = np.linspace(cmin - pad, cmax + pad, 1200)
+    y = lower_smooth_density_values(
+        x=x,
+        centers=centers,
+        radii=radii,
+        lam=lam,
+        s=sol.s_star,
+        tau=tau,
+    )
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.plot(x, y, linewidth=2.0, color="tab:green", label=r"$q_{\tau,+}(x)$")
+    ax.scatter(centers, np.zeros_like(centers), marker="x", s=80, label="samples")
+    ax.set_title(r"Theorem B tau-smooth lower-bound approximation: $q_{\tau,+}(x)$")
+    ax.set_xlabel("x")
+    ax.set_ylabel("density")
+    ax.grid(alpha=0.25)
+    ax.legend(ncol=2, fontsize=9)
+    return fig
+
+
 def main() -> None:
     st.set_page_config(page_title="Theorem B 1D Visualizer", layout="wide")
     st.title("定理B（一维）交互可视化：平顶核最优预测密度")
@@ -161,7 +378,7 @@ def main() -> None:
 
     with st.sidebar:
         st.header("参数设置")
-        n = st.slider("样本个数 N", min_value=1, max_value=5, value=3, step=1)
+        n = st.slider("样本个数 N", min_value=1, max_value=10, value=3, step=1)
         slider_min = st.number_input("样本滑动条最小值", value=-5.0, step=0.5)
         slider_max = st.number_input("样本滑动条最大值", value=5.0, step=0.5)
         if slider_max <= slider_min:
@@ -194,6 +411,8 @@ def main() -> None:
             c1 = st.number_input("c1 (> beta)", value=2.0, min_value=0.051, step=0.1)
             c2 = st.number_input("c2 (>0)", value=1.0, min_value=1e-6, step=0.1, format="%.6f")
             st.write("m = 1 (固定，一维)")
+        st.markdown("---")
+        tau = st.slider("下界保持平滑参数 tau", min_value=1.0, max_value=80.0, value=20.0, step=1.0)
 
     params = RadiusParams(beta=beta, m=1, a=float(a), c1=float(c1), c2=float(c2))
 
@@ -204,6 +423,15 @@ def main() -> None:
         radii = [r_current + rb for rb in r_base]
         sol = solve_drpp_1d_exact(centers=centers, epsilon=eps, radii=radii)
         fig_lse, lam_lse, s_lse, j_lse = build_lse_plot(centers=centers, radii=radii, epsilon=eps)
+        tau_sol = solve_lower_smooth_1d(
+            centers=centers,
+            radii=radii,
+            epsilon=eps,
+            tau=float(tau),
+            initial_lambda=sol.lambda_star,
+            initial_s=sol.s_star,
+        )
+        fig_tau = build_tau_smooth_lower_plot(centers=centers, radii=radii, sol=tau_sol, tau=float(tau))
     except Exception as exc:
         st.error(f"求解失败：{exc}")
         return
@@ -234,6 +462,18 @@ def main() -> None:
         st.write("- s_LSE:")
         for i, si in enumerate(s_lse, start=1):
             st.write(f"  - s_LSE[{i}] = {si:.8f}")
+        st.markdown("---")
+        st.subheader("tau-平滑下界参数")
+        st.write(f"- tau: **{tau:.2f}**")
+        st.write(f"- lambda_tau: **{tau_sol.lambda_star:.8f}**")
+        st.write(f"- J_tau: **{tau_sol.objective_value:.8f}**")
+        st.write(f"- G_tau(lambda,s): **{tau_sol.constraint_value:.8f}**")
+        st.write(f"- success: **{tau_sol.success}**")
+        st.write(f"- iterations: **{tau_sol.iterations}**")
+        st.write(f"- LSE gap scale log(N)/tau: **{math.log(n) / float(tau):.8f}**")
+        st.write("- s_tau:")
+        for i, si in enumerate(tau_sol.s_star, start=1):
+            st.write(f"  - s_tau[{i}] = {si:.8f}")
 
     with c2_col:
         st.subheader("概率密度曲线（精确解）")
@@ -243,6 +483,12 @@ def main() -> None:
         st.subheader("LSE松弛分布曲线（和式分布）")
         st.caption(r"$q_{\mathrm{LSE}}(x)=\sum_i \exp(s_i^{\mathrm{LSE}}-\lambda^{\mathrm{LSE}}[|x-c_i|-R_i]_+)$")
         st.pyplot(fig_lse, use_container_width=True)
+
+        st.subheader("tau-平滑下界分布曲线")
+        st.caption(
+            r"$q_{\tau,+}(x)=\exp\!\left(\frac{1}{\tau}\log\sum_i e^{\tau(s_i-\lambda[|x-c_i|-R_i]_+)}\right)$"
+        )
+        st.pyplot(fig_tau, use_container_width=True)
 
     st.markdown("---")
     st.markdown(

@@ -367,6 +367,63 @@ $$
    $$
 命题证毕。$\square$
 
+**命题（含 $\tau$ 的下界保持扩展）**  
+上面的加性 LSE（$\tau=1$）可推广为一族平滑上逼近约束。定义
+$$
+A_i(x):=s_i-\lambda\varphi_i(x),\qquad
+m_\tau^{+}(A):=\frac1\tau\log\sum_{i=1}^N e^{\tau A_i},\quad \tau>0.
+$$
+并定义
+$$
+G_\tau^{+}(\lambda,\mathbf s):=
+\int_{\mathcal X}\exp\!\big(m_\tau^{+}(A_1(x),\dots,A_N(x))\big)\,dx
+=
+\int_{\mathcal X}\Big(\sum_{i=1}^N e^{\tau A_i(x)}\Big)^{1/\tau}dx.
+$$
+对应优化值记为
+$$
+V_\tau^{+}
+:=
+\max_{\lambda\ge0,\mathbf s}
+\left\{-\lambda\varepsilon+\frac1N\sum_{i=1}^Ns_i\right\}
+\quad\text{s.t.}\quad
+G_\tau^{+}(\lambda,\mathbf s)\le1.
+$$
+则有
+$$
+V_\tau^{+}\le V_{\mathrm{low}}\le V_{\mathrm{strict}}.
+$$
+
+**证明：**
+由 LSE 基本不等式（$\tau>0$）：
+$$
+\max_i A_i(x)\le \frac1\tau\log\sum_i e^{\tau A_i(x)},
+$$
+逐点指数化得
+$$
+\max_i e^{A_i(x)}
+\le
+\Big(\sum_i e^{\tau A_i(x)}\Big)^{1/\tau}.
+$$
+对 $x$ 积分即
+$$
+G(\lambda,\mathbf s)\le G_\tau^{+}(\lambda,\mathbf s).
+$$
+因此可行域包含关系
+$$
+\{G_\tau^{+}\le1\}\subseteq\{G\le1\},
+$$
+在相同目标（最大化）下得到 $V_\tau^{+}\le V_{\mathrm{low}}$；再与定理 2 的
+$V_{\mathrm{low}}\le V_{\mathrm{strict}}$ 链式合并即证。$\square$
+
+**备注：**
+1. $\tau=1$ 时，$G_\tau^{+}$ 退化为本节原加性 LSE 约束
+   $$
+   \bar G(\lambda,\mathbf s)=\int_{\mathcal X}\sum_i e^{A_i(x)}dx.
+   $$
+2. 当 $\tau\to\infty$ 时，$m_\tau^{+}(A)\downarrow \max_i A_i$，故
+   $G_\tau^{+}\downarrow G$，可行域逐步放宽，$V_\tau^{+}$ 从下方逼近 $V_{\mathrm{low}}$（通常更紧）。
+
 ### 4.2 全空间单核积分
 
 记 $\mathcal{X} = \mathbb{R}^d$。定义 $d$ 维全空间积分常数：
